@@ -39,6 +39,12 @@ def test_qa_threshold_defaults():
     assert s.qa_eccentricity_absolute is None
 
 
+def test_scatter_threshold_defaults():
+    s = Settings(_env_file=None)
+    assert s.qa_scatter_reject_sigma == 2.0 and s.qa_scatter_marginal_sigma == 1.0
+    assert s.qa_scatter_absolute is None
+
+
 def test_env_override(monkeypatch):
     monkeypatch.setenv("SEESTAR_ALPACA_BASE_URL", "http://10.0.0.5:5555")
     monkeypatch.setenv("SEESTAR_ALPACA_DEVICE_NUM", "3")
