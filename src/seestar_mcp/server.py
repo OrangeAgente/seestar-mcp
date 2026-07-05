@@ -164,8 +164,8 @@ class SeestarController:
         """Read the device's live ``get_view_state`` telemetry (native method)."""
         try:
             state = await self.alpaca.method_sync("get_view_state")
-            if (err := _native_error(state)) is not None:
-                return {"ok": False, "error": err, "raw": state}
+            if (bad := _native_fail(state)) is not None:
+                return bad
             return {"ok": True, "view_state": state}
         except AlpacaError as exc:
             return _err(exc)
@@ -210,6 +210,18 @@ class SeestarController:
                     "lp_filter": bool(use_lp_filter),
                 },
             )
+            # A native "Error: ..." result means the scope did NOT start the view
+            # (e.g. "Exceeded allotted wait time"). Surface ok:false so the
+            # run-session flow won't proceed to solve/stack on a phantom goto.
+            if (bad := _native_fail(
+                result,
+                session_id=session_id,
+                target=name,
+                ra=ra,
+                dec=dec,
+                lp_filter=bool(use_lp_filter),
+            )) is not None:
+                return bad
             return {
                 "ok": True,
                 "session_id": session_id,
@@ -227,6 +239,8 @@ class SeestarController:
         try:
             # FIRMWARE-DEPENDENT: native start-stack method name.
             result = await self.alpaca.method_sync("iscope_start_stack")
+            if (bad := _native_fail(result)) is not None:
+                return bad
             return {"ok": True, "result": result}
         except AlpacaError as exc:
             return _err(exc)
@@ -236,6 +250,8 @@ class SeestarController:
         try:
             # FIRMWARE-DEPENDENT: native stop method + arg shape.
             result = await self.alpaca.method_sync("iscope_stop_view", [mode])
+            if (bad := _native_fail(result, mode=mode)) is not None:
+                return bad
             return {"ok": True, "mode": mode, "result": result}
         except AlpacaError as exc:
             return _err(exc)
@@ -244,6 +260,8 @@ class SeestarController:
         """Run the autofocus routine; seed the Tier-1 focus baseline afterwards."""
         try:
             result = await self.alpaca.method_sync("start_auto_focus")
+            if (bad := _native_fail(result)) is not None:
+                return bad
             focus_pos = None
             try:
                 focus = await self.alpaca.method_sync(
@@ -265,8 +283,8 @@ class SeestarController:
             focus = await self.alpaca.method_sync(
                 "get_focuser_position", {"ret_obj": True}
             )
-            if (err := _native_error(focus)) is not None:
-                return {"ok": False, "error": err, "raw": focus}
+            if (bad := _native_fail(focus)) is not None:
+                return bad
             return {"ok": True, "focuser": focus, "focus_pos": _extract_focus_pos(focus)}
         except AlpacaError as exc:
             return _err(exc)
@@ -277,8 +295,8 @@ class SeestarController:
             # FIRMWARE-DEPENDENT: solve method names.
             await self.alpaca.method_sync("start_solve")
             result = await self.alpaca.method_sync("get_solve_result")
-            if (err := _native_error(result)) is not None:
-                return {"ok": False, "error": err, "raw": result}
+            if (bad := _native_fail(result)) is not None:
+                return bad
             return {"ok": True, "solve_result": result}
         except AlpacaError as exc:
             return _err(exc)
@@ -287,6 +305,8 @@ class SeestarController:
         """Set the filter wheel position (LP / IR-Cut / Dark, by index)."""
         try:
             result = await self.alpaca.method_sync("set_wheel_position", [position])
+            if (bad := _native_fail(result, position=position)) is not None:
+                return bad
             return {"ok": True, "position": position, "result": result}
         except AlpacaError as exc:
             return _err(exc)
@@ -303,6 +323,8 @@ class SeestarController:
             result = await self.alpaca.method_sync(
                 "set_setting", {"heater": bool(on)}
             )
+            if (bad := _native_fail(result, heater=bool(on))) is not None:
+                return bad
             return {
                 "ok": True,
                 "heater": bool(on),
@@ -320,6 +342,8 @@ class SeestarController:
         try:
             # FIRMWARE-DEPENDENT: native park method name.
             result = await self.alpaca.method_sync("scope_park")
+            if (bad := _native_fail(result)) is not None:
+                return bad
             return {"ok": True, "result": result}
         except AlpacaError as exc:
             return _err(exc)
@@ -332,6 +356,8 @@ class SeestarController:
         """
         try:
             result = await self.alpaca.method_sync("pi_shutdown")
+            if (bad := _native_fail(result)) is not None:
+                return bad
             return {
                 "ok": True,
                 "result": result,
@@ -538,6 +564,24 @@ def _native_error(value: Any) -> str | None:
         result = value.get("result")
         if isinstance(result, str) and result.strip().lower().startswith("error"):
             return result
+    return None
+
+
+def _native_fail(value: Any, **extra: Any) -> dict | None:
+    """Return an ``ok:false`` envelope if ``value`` is a native error, else None.
+
+    Wraps :func:`_native_error` so every controller method that hands a native
+    ``method_sync`` result back to the caller can guard it uniformly::
+
+        if (bad := _native_fail(result)) is not None:
+            return bad
+
+    ``extra`` carries through any context fields (e.g. ``session_id`` on a goto)
+    so a surfaced error still reports what was attempted.
+    """
+    err = _native_error(value)
+    if err is not None:
+        return {"ok": False, "error": err, "raw": value, **extra}
     return None
 
 
