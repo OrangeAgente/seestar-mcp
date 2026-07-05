@@ -300,3 +300,83 @@ async def test_download_requires_dest_without_settings(tmp_path):
     sub = SubInfo(name="x.fit", path="M31_sub/x.fit", target="M31")
     with pytest.raises(ValueError):
         await client.download_subs([sub])  # no dest, not from_settings
+
+
+# --- security: path traversal in untrusted device listings ----------------
+
+
+def test_coerce_item_dict_name_is_basenamed():
+    """A dict listing entry's name is reduced to a bare basename (untrusted)."""
+    client, _, _ = _make_client()
+    info = client._coerce_item(
+        {"name": "..\\..\\..\\evil.fits", "path": "M31_sub/real.fits"}
+    )
+    assert info is not None
+    # name must never carry a separator or traversal component.
+    assert info.name == "evil.fits"
+    assert "/" not in info.name and "\\" not in info.name
+    # path is preserved verbatim: it is only used to build the remote fetch URL.
+    assert info.path == "M31_sub/real.fits"
+
+
+def test_list_subs_parse_basenames_malicious_dict_name():
+    """End-to-end parse: malicious dict name yields a bare basename SubInfo."""
+    client, _, _ = _make_client()
+    subs = client._parse_listing(
+        [{"name": "..\\..\\..\\evil.fits", "path": "M31_sub/real.fits"}], None
+    )
+    assert len(subs) == 1
+    assert subs[0].name == "evil.fits"
+
+
+@respx.mock
+async def test_download_subs_source_sanitized_name_lands_inside(tmp_path):
+    """A name sanitized at the source lands safely inside the dest dir."""
+    client, _, _ = _make_client()
+    sub = client._coerce_item(
+        {"name": "..\\..\\..\\evil.fits", "path": "M31_sub/real.fits"}
+    )
+    assert sub is not None and sub.name == "evil.fits"
+    route = respx.get(f"http://{HOST}:80/M31_sub/real.fits").mock(
+        return_value=httpx.Response(200, content=FITS_BYTES)
+    )
+
+    results = await client.download_subs([sub], dest=tmp_path)
+    assert route.called
+    local = tmp_path / "evil.fits"
+    assert local.read_bytes() == FITS_BYTES
+    assert results[0]["path"] == str(local)
+    # Nothing escaped the dest dir.
+    assert not (tmp_path.parent / "evil.fits").exists()
+
+
+async def test_download_subs_absolute_name_rejected_no_write(tmp_path):
+    """A directly-constructed ABSOLUTE name fails closed (ValueError, no write)."""
+    prov = ProvenanceLog(tmp_path / "prov.jsonl")
+    client, _, _ = _make_client(provenance=prov)
+    outside = tmp_path.parent / "escape.fits"
+    if outside.exists():
+        outside.unlink()
+    # Absolute name: pathlib's `dest_dir / abs` discards dest_dir entirely.
+    sub = SubInfo(name=str(outside), path="M31_sub/real.fits")
+
+    with pytest.raises(ValueError):
+        await client.download_subs([sub], dest=tmp_path)  # HTTP never attempted
+
+    # Fail closed: no file written at the attacker-chosen outside location.
+    assert not outside.exists()
+
+    # The blocked attempt is audited.
+    lines = (tmp_path / "prov.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    record = json.loads(lines[-1])
+    assert record["tool"] == "data.download.rejected"
+    assert record["args"]["name"] == str(outside)
+
+
+async def test_download_subs_windows_absolute_name_rejected(tmp_path):
+    """A Windows/POSIX absolute drive/root name is rejected by the guard."""
+    client, _, _ = _make_client()
+    for bad in ("C:\\Windows\\evil.fits", "/etc/evil.fits"):
+        sub = SubInfo(name=bad, path="M31_sub/real.fits")
+        with pytest.raises(ValueError):
+            await client.download_subs([sub], dest=tmp_path)
