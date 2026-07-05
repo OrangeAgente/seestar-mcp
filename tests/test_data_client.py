@@ -10,6 +10,7 @@ listing data. SMB is never actually contacted: the ``_download_smb`` helper (or
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import httpx
@@ -380,3 +381,99 @@ async def test_download_subs_windows_absolute_name_rejected(tmp_path):
         sub = SubInfo(name=bad, path="M31_sub/real.fits")
         with pytest.raises(ValueError):
             await client.download_subs([sub], dest=tmp_path)
+
+
+# --- filesystem / UNC (SMB-mount) sub access ------------------------------
+
+
+def _make_sub_dir(myworks: Path, dir_name: str, fit_names, jpg_names=()):
+    """Create <myworks>/<dir_name> with the given .fit and .jpg files."""
+    sub_dir = myworks / dir_name
+    sub_dir.mkdir(parents=True, exist_ok=True)
+    for name in fit_names:
+        (sub_dir / name).write_bytes(FITS_BYTES)
+    for name in jpg_names:
+        (sub_dir / name).write_bytes(b"jpg-bytes")
+    return sub_dir
+
+
+def test_find_sub_dir_matches_spaced_name(tmp_path):
+    """A spaced target dir ("M 31_sub") matches "M31"/"M 31"/"m31"; misses -> None."""
+    myworks = tmp_path / "MyWorks"
+    sub_dir = _make_sub_dir(
+        myworks,
+        "M 31_sub",
+        ["Light_M 31_10.0s_IRCUT_a.fit",
+         "Light_M 31_10.0s_IRCUT_b.fit",
+         "Light_M 31_10.0s_LP_c.fit"],
+        jpg_names=["Light_M 31_10.0s_IRCUT_a.jpg"],
+    )
+    assert DataClient._find_sub_dir(myworks, "M31") == sub_dir
+    assert DataClient._find_sub_dir(myworks, "M 31") == sub_dir
+    assert DataClient._find_sub_dir(myworks, "m31") == sub_dir
+    assert DataClient._find_sub_dir(myworks, "NGC281") is None
+
+
+def test_find_sub_dir_prefers_underscore_and_more_files(tmp_path):
+    """Given both "M 31_sub" and "M 31-sub", the "_sub" variant is chosen."""
+    myworks = tmp_path / "MyWorks"
+    underscore = _make_sub_dir(myworks, "M 31_sub", ["a.fit", "b.fit", "c.fit"])
+    _make_sub_dir(myworks, "M 31-sub", ["z.fit"])
+    assert DataClient._find_sub_dir(myworks, "M31") == underscore
+
+
+async def test_list_subs_fs(tmp_path):
+    """image_root set -> list_subs reads .fit from the fs and skips method_sync + jpgs."""
+    myworks = tmp_path / "MyWorks"
+    fit_names = [
+        "Light_M 31_10.0s_IRCUT_20260704_2231.fit",
+        "Light_M 31_10.0s_IRCUT_20260704_2232.fit",
+        "Light_M 31_10.0s_LP_20260704_2233.fit",
+    ]
+    _make_sub_dir(
+        myworks,
+        "M 31_sub",
+        fit_names,
+        jpg_names=[
+            "Light_M 31_10.0s_IRCUT_20260704_2231.jpg",
+            "Light_M 31_10.0s_IRCUT_20260704_2231_thn.jpg",
+        ],
+    )
+    client, alpaca, _ = _make_client(image_root=str(myworks))
+    subs = await client.list_subs("M31")
+
+    assert len(subs) == 3
+    assert [s.name for s in subs] == sorted(fit_names)
+    assert all(s.path.endswith(".fit") for s in subs)
+    assert all(Path(s.path).is_absolute() for s in subs)
+    assert all(s.target == "M31" for s in subs)
+    alpaca.method_sync.assert_not_awaited()
+
+
+async def test_download_subs_fs_copies(tmp_path):
+    """Subs with existing fs paths are copied (transport=="fs") + hashed."""
+    myworks = tmp_path / "MyWorks"
+    _make_sub_dir(myworks, "M 31_sub", ["a.fit", "b.fit"])
+    client, _, _ = _make_client(image_root=str(myworks))
+    subs = client._list_subs_fs("M31")
+    assert len(subs) == 2
+
+    out = tmp_path / "out"
+    results = await client.download_subs(subs, dest=out)
+
+    assert len(results) == 2
+    for r in results:
+        assert r["transport"] == "fs"
+        assert r["sha256"] == hash_fits(FITS_BYTES)
+        assert Path(r["path"]).exists()
+    assert (out / "a.fit").read_bytes() == FITS_BYTES
+    assert (out / "b.fit").read_bytes() == FITS_BYTES
+
+
+async def test_image_root_empty_uses_method_sync():
+    """Regression: image_root empty -> list_subs still uses alpaca.method_sync."""
+    client, alpaca, _ = _make_client()  # image_root default ""
+    alpaca.method_sync.return_value = ["M31_sub/DSO_Stacked_1_M31_10s.fit"]
+    subs = await client.list_subs("M31")
+    alpaca.method_sync.assert_awaited_once()
+    assert len(subs) == 1

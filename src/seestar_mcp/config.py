@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     http_port: int = 80  # device built-in HTTP server for sub downloads
     smb_port: int = 445  # SMB share for data pulls/deletes
 
+    # Filesystem path to the Seestar's MyWorks folder (e.g.
+    # ``\\<seestar-ip>\EMMC Images\MyWorks``, a mapped drive, or a local
+    # copy). When set, list_subs/download_subs read subs directly from the
+    # filesystem (OS SMB redirector) instead of the JSON-RPC/HTTP path.
+    seestar_image_root: str = ""
+
     # --- MCP server bind ---
     # MUST default to localhost. Never expose beyond localhost/LAN. See the
     # bind-host validator below, which warns on public addresses.

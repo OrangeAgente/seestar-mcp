@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -106,6 +107,16 @@ def _infer_target(path: str) -> str | None:
     return None
 
 
+def _normalize_target(name: str) -> str:
+    """Reduce a target/dir name to a comparison key: lowercase alphanumerics only.
+
+    So ``"M 31"`` -> ``"m31"`` and the targets ``"M31"``/``"M 31"``/``"m31"`` all
+    normalize to the same key, letting a spaced on-scope target name match a
+    ``"<Target>_sub"`` directory regardless of spacing/case.
+    """
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
 class DataClient:
     """Lists FITS subs (via seestar_alp) and downloads them (HTTP, SMB fallback)."""
 
@@ -121,12 +132,16 @@ class DataClient:
         http_client: httpx.AsyncClient | None = None,
         list_method: str = DEFAULT_LIST_METHOD,
         smb_share: str = DEFAULT_SMB_SHARE,  # FIRMWARE-DEPENDENT (see module docstring)
+        image_root: str = "",
     ) -> None:
         self._alpaca = alpaca
         self._host = host
         self._http_port = http_port
         self._smb_port = smb_port
         self._provenance = provenance
+        # When set, list/download read subs directly from this filesystem path
+        # (UNC/mapped/local) via the OS SMB redirector instead of JSON-RPC/HTTP.
+        self.image_root = image_root
         # FIRMWARE-DEPENDENT: single updatable point for the listing method name.
         self.list_method = list_method
         self._smb_share = smb_share
@@ -155,6 +170,7 @@ class DataClient:
             smb_port=settings.smb_port,
             http_timeout_s=settings.http_timeout_s,
             provenance=provenance,
+            image_root=settings.seestar_image_root,
         )
         client._data_dir = settings.data_dir
         return client
@@ -252,10 +268,100 @@ class DataClient:
             subs.append(info)
         return subs
 
+    # --- filesystem / UNC (SMB-mount) access -------------------------------
+
+    @staticmethod
+    def _find_sub_dir(image_root: str | Path, target: str) -> Path | None:
+        """Return the best ``<Target>_sub``/``-sub`` dir under ``image_root``.
+
+        Among the immediate subdirectories of ``image_root`` whose name ends
+        with ``_sub`` or ``-sub``, match those whose base name (the part before
+        the suffix) normalizes (see :func:`_normalize_target`) to ``target``.
+        Prefer the ``_sub`` variant; when both variants match, pick the one with
+        more ``.fit``/``.fits`` files. Returns ``None`` if none match or
+        ``image_root`` is unreadable. Never raises.
+        """
+        want = _normalize_target(target)
+        if not want:
+            return None
+        root = Path(image_root)
+        try:
+            entries = list(root.iterdir())
+        except OSError:
+            return None
+
+        # (prefer_underscore, fit_count, dir) — higher sorts first.
+        candidates: list[tuple[int, int, Path]] = []
+        for entry in entries:
+            try:
+                if not entry.is_dir():
+                    continue
+            except OSError:
+                continue
+            lower = entry.name.lower()
+            if lower.endswith("_sub"):
+                prefer = 1
+            elif lower.endswith("-sub"):
+                prefer = 0
+            else:
+                continue
+            base = entry.name[:-4]  # strip the 4-char "_sub"/"-sub" suffix
+            if _normalize_target(base) != want:
+                continue
+            try:
+                fit_count = sum(
+                    1 for p in entry.iterdir() if p.suffix.lower() in _FITS_SUFFIXES
+                )
+            except OSError:
+                fit_count = 0
+            candidates.append((prefer, fit_count, entry))
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
+        return candidates[0][2]
+
+    def _list_subs_fs(self, target: str | None) -> list[SubInfo]:
+        """List FITS subs for ``target`` directly from the filesystem.
+
+        Resolves ``<image_root>/<Target>_sub`` via :meth:`_find_sub_dir`, globs
+        ``*.fit``/``*.fits`` (the ``.jpg`` previews are excluded), and returns
+        :class:`SubInfo`s with absolute filesystem paths, sorted by name. Empty
+        list when no matching dir. Never raises.
+        """
+        if not target:
+            return []
+        sub_dir = self._find_sub_dir(self.image_root, target)
+        if sub_dir is None:
+            return []
+        try:
+            paths = list(sub_dir.glob("*.fit")) + list(sub_dir.glob("*.fits"))
+        except OSError:
+            return []
+        subs: list[SubInfo] = []
+        for path in sorted(paths, key=lambda p: p.name):
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = None
+            subs.append(
+                SubInfo(name=path.name, path=str(path), size=size, target=target)
+            )
+        return subs
+
     # --- listing -----------------------------------------------------------
 
     async def list_subs(self, target: str | None = None) -> list[SubInfo]:
         """Enumerate saved FITS subs, optionally filtered to one ``target``."""
+        # Filesystem/UNC path: when an image root is configured, read subs
+        # directly off the mounted share (OS SMB redirector) — no JSON-RPC/HTTP.
+        if self.image_root:
+            subs = self._list_subs_fs(target)
+            self._log(
+                tool="data.list_subs",
+                args={"target": target, "count": len(subs), "source": "fs"},
+            )
+            return subs
         # FIRMWARE-DEPENDENT: params *shape* for the listing method. Unconfirmed
         # against hardware; keep both the method name and this shape updatable.
         params: list = [{"target": target}] if target else []
@@ -308,6 +414,34 @@ class DataClient:
                 raise ValueError(
                     f"refusing to write outside data dir: {sub.name!r}"
                 )
+
+            # Filesystem/UNC source: when ``sub.path`` is an existing file (a
+            # UNC/mapped/local path from ``_list_subs_fs``), copy it directly
+            # over the OS SMB redirector — no HTTP/SMB fetch. Device-relative
+            # URL paths won't exist as files and fall through to HTTP-then-SMB.
+            source = Path(sub.path)
+            try:
+                is_local_file = source.is_file()
+            except OSError:
+                is_local_file = False
+            if is_local_file:
+                shutil.copy2(source, local_path)
+                fits_hash = hash_fits(local_path)
+                self._log(
+                    tool="data.download",
+                    args={"name": sub.name, "transport_used": "fs"},
+                    fits_hash=fits_hash,
+                )
+                results.append(
+                    {
+                        "name": sub.name,
+                        "path": str(local_path),
+                        "transport": "fs",
+                        "sha256": fits_hash,
+                        "bytes": local_path.stat().st_size,
+                    }
+                )
+                continue
 
             data, used, http_status = await self._fetch(sub, dest_dir, transport)
             local_path.write_bytes(data)
