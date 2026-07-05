@@ -46,6 +46,18 @@ ports.** The residual remote-access concern is account security (protect the Cla
 account/MFA — pairing the app grants session control), not a listening service. Every port
 this project touches is loopback or LAN and is never exposed publicly.
 
+### Autonomous operation
+
+Unattended full-night operation (the `autonomous-night` skill) is **gated behind an explicit
+user confirmation of a no-motion dry run.** `simulate_night` projects the whole night's
+schedule and issues **no motion**; the first motion command only follows an explicit user
+go-ahead. The hard guardrails — **dawn, battery, weather no-go, lost connection, max
+duration** — **fail safe to `park`**: each hard stop winds the session down and parks the
+mount, and if the scope's health can't be confirmed (device state unreadable → treated as
+disconnected) the run stops. Every guardrail decision is **provenance-logged**. Autonomy
+adds **no new network host and no inbound surface** — it is the same audited, honestly
+described tools driven in a visible loop, still subject to every control below.
+
 ## OWASP MCP Top 10 — mitigations
 
 | Risk | Our concrete control |
