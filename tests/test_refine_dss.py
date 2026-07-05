@@ -32,6 +32,8 @@ def test_build_file_list_includes_darks_and_flats():
 
 
 def test_run_dss_builds_command_and_locates_master(tmp_path):
+    from pathlib import Path
+
     from seestar_refine.dss import run_dss
 
     calls = {}
@@ -39,7 +41,9 @@ def test_run_dss_builds_command_and_locates_master(tmp_path):
     def fake_runner(cmd, **kw):
         calls["cmd"] = cmd
         calls["kw"] = kw
-        (tmp_path / "Autosave.tif").write_bytes(b"x")  # simulate DSS output
+        # Emulate DSS writing the master to the explicit /O:<path> output.
+        opt = next(c for c in cmd if str(c).startswith("/O:"))
+        Path(str(opt)[3:]).write_bytes(b"x")
 
         class R:
             returncode = 0
@@ -52,15 +56,18 @@ def test_run_dss_builds_command_and_locates_master(tmp_path):
         str(tmp_path / "list.txt"),
         tmp_path,
         dss_cli="C:/DSS/DeepSkyStackerCL.exe",
+        master_name="m.fit",
         runner=fake_runner,
     )
     assert r["ok"] is True
-    assert r["master_path"].endswith("Autosave.tif")
+    assert r["master_path"].endswith("m.fit")
     assert r["returncode"] == 0
-    assert any("DeepSkyStackerCL" in str(c) for c in calls["cmd"])
-    # The configured CLI + the /L file-list flag must be on the command line.
+    # VALIDATED command (DSS 6.2.1): /r /S /FITS /O:<master> <listfile-positional>.
     assert calls["cmd"][0] == "C:/DSS/DeepSkyStackerCL.exe"
-    assert "/L" in calls["cmd"]
+    assert "/r" in calls["cmd"] and "/S" in calls["cmd"]
+    assert any(str(c).startswith("/O:") for c in calls["cmd"])
+    assert "/L" not in calls["cmd"]  # the list is POSITIONAL, not a flag
+    assert str(tmp_path / "list.txt") in [str(c) for c in calls["cmd"]]
     # subprocess.run kwargs the injectable runner is called with.
     assert calls["kw"].get("capture_output") is True
     assert calls["kw"].get("text") is True

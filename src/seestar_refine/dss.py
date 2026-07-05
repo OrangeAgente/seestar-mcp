@@ -12,14 +12,12 @@ Three layers, all pure/testable without the real app:
   call :func:`run_dss`, open the master with astropy for basic stats, and return
   a :class:`~seestar_refine.models.StackResult`. Never raises.
 
-.. note:: FORMAT-DEPENDENT
-
-   The exact DSS *file-list* text and the ``DeepSkyStackerCL`` *command flags*
-   below are a best-effort encoding of the documented format. They are flagged
-   ``# FORMAT-DEPENDENT`` and MUST be validated against the installed DSS during
-   real use (single, isolated update point). Tests only assert the buildable
-   logic (every sub is listed; the CLI + ``/L`` flag + subprocess kwargs; master
-   location; error handling) — never a real stack.
+.. note:: VALIDATED against DeepSkyStacker 6.2.1 (2026-07-05) on real Seestar M31
+   subs. The file-list header (``CHECKED<TAB>TYPE<TAB>FILE``) and the command
+   (``/r /S /FITS /O:<master> <listfile>`` — the list is POSITIONAL, no ``/L``)
+   are confirmed. Tests still mock the subprocess (the real DSS is never run in
+   CI) and assert the buildable logic: every sub listed; the command flags;
+   master location; error handling.
 """
 
 from __future__ import annotations
@@ -67,9 +65,11 @@ def build_file_list(
     lines: list[str] = []
     # FORMAT-DEPENDENT header line DSS writes at the top of a saved file list.
     lines.append("DSS file list")
-    # FORMAT-DEPENDENT column header: Checked, Type, Path (tab-separated). "1"
-    # marks the frame as checked/included; the type keyword selects the group.
-    lines.append("Checked\tType\tPath")
+    # VALIDATED (DSS 6.2.1, 2026-07-05, on real Seestar subs): the header row must
+    # be exactly "CHECKED<TAB>TYPE<TAB>FILE". "1" marks the frame checked/included;
+    # the type keyword (light/dark/flat/offset/...) selects the group. Spaces in
+    # file paths are fine (tab-delimited).
+    lines.append("CHECKED\tTYPE\tFILE")
 
     def _emit(paths: list[str], frame_type: str) -> None:
         for path in paths:
@@ -107,6 +107,7 @@ def run_dss(
     output_dir: str | Path,
     *,
     dss_cli: str,
+    master_name: str = "master.fit",
     timeout_s: int = 1800,
     runner: Callable[..., object] = subprocess.run,
 ) -> dict:
@@ -126,15 +127,19 @@ def run_dss(
     interface and must be confirmed against the installed DSS.
     """
     output_dir = Path(output_dir)
-    # FORMAT-DEPENDENT command: "/L <list>" loads the file list; the remaining
-    # flags request a register+integrate run that writes the autosave master. The
-    # real flag spelling (e.g. "/S" to stack) must be verified on the installed
-    # DeepSkyStackerCL — this is the single point to update.
+    master_out = output_dir / master_name
+    # VALIDATED (DSS 6.2.1, 2026-07-05, on real Seestar M31 subs): register (/r)
+    # then stack (/S), write a FITS master (/FITS) to an explicit path
+    # (/O:<full path>); the file list is the POSITIONAL final argument — there is
+    # NO "/L" flag. Without /O, DSS writes Autosave.tif beside the first light
+    # frame (not our output dir), so /O is required.
     cmd = [
         dss_cli,
-        "/L",
+        "/r",
+        "/S",
+        "/FITS",
+        f"/O:{master_out}",
         str(file_list_path),
-        "/S",  # FORMAT-DEPENDENT: register + integrate (stack) the loaded list.
     ]
     try:
         proc = runner(cmd, capture_output=True, text=True, timeout=timeout_s)
@@ -169,7 +174,7 @@ def run_dss(
             "error": f"DeepSkyStackerCL exited with code {returncode}",
         }
 
-    master_path = _find_master(output_dir)
+    master_path = str(master_out) if master_out.is_file() else _find_master(output_dir)
     if master_path is None:
         return {
             "ok": False,
@@ -263,6 +268,7 @@ def stack(
             str(file_list_path),
             output_dir,
             dss_cli=settings.dss_cli,
+            master_name=f"{_slug(target)}_master.fit",
             runner=runner,
         )
         if not run["ok"]:
