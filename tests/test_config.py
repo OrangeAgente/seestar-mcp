@@ -11,7 +11,9 @@ from seestar_mcp.config import Settings, get_settings
 
 
 def test_defaults_match_spec():
-    s = Settings()
+    # _env_file=None so a developer's local .env (e.g. pointing at a real scope)
+    # cannot override the code defaults this test asserts.
+    s = Settings(_env_file=None)
     assert s.alpaca_base_url == "http://127.0.0.1:5555"
     assert s.alpaca_device_num == 1
     assert s.seestar_host == "127.0.0.1"
