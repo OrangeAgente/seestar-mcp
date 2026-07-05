@@ -41,9 +41,10 @@ sys.path.insert(0, str(FIXTURE_DIR))
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_fixtures():
     """(Re)create the FITS fixtures if any are missing."""
-    from make_fixtures import SPECS, make_all
+    from make_fixtures import HAZY_NAME, SPECS, make_all
 
-    missing = any(not (FIXTURE_DIR / f"{s.name}.fits").exists() for s in SPECS)
+    names = [s.name for s in SPECS] + [HAZY_NAME]
+    missing = any(not (FIXTURE_DIR / f"{n}.fits").exists() for n in names)
     if missing:
         make_all(FIXTURE_DIR)
     yield
@@ -98,6 +99,28 @@ def test_analyze_sub_garbage_file_returns_error_no_raise(tmp_path):
     bad = analyze_sub(junk)
     assert bad.error is not None
     assert bad.star_count == 0
+
+
+# --- scattered_light metric (photutils on fixtures) -----------------------
+
+
+def test_scattered_light_low_on_good_fixture():
+    m = analyze_sub(FIXTURE_DIR / "good.fits")
+    # good.fits is a flat dark sky: measured ~0.0006, pinned well below hazy (~0.053).
+    assert m.scattered_light is not None and m.scattered_light < 0.02
+
+
+def test_scattered_light_high_on_hazy_fixture():
+    good = analyze_sub(FIXTURE_DIR / "good.fits")
+    hazy = analyze_sub(FIXTURE_DIR / "hazy.fits")
+    assert hazy.scattered_light is not None and good.scattered_light is not None
+    assert hazy.scattered_light > good.scattered_light * 1.5   # clearly elevated
+    # ...while still PASSING the OLD floors (the whole point of the metric).
+    assert hazy.star_count >= 20 and (hazy.fwhm or 99) < 7
+
+
+def test_scattered_light_none_on_garbage(tmp_path):
+    assert analyze_sub(tmp_path / "nope.fits").scattered_light is None  # no raise
 
 
 # --- classify (pure, hand-built metrics) ----------------------------------
