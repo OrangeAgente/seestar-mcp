@@ -201,6 +201,76 @@ def _png_channel_means(path):
     )
 
 
+def _make_bordered_fits(tmp_path):
+    from astropy.io import fits
+
+    rng = np.random.default_rng(11)
+    h, w = 64, 64
+    r = np.zeros((h, w))
+    g = np.zeros((h, w))
+    b = np.zeros((h, w))
+    # A valid data rectangle inside a black (0) field-rotation border.
+    r[10:54, 12:52] = rng.normal(800, 20, (44, 40))
+    g[10:54, 12:52] = rng.normal(800, 20, (44, 40))
+    b[10:54, 12:52] = rng.normal(800, 20, (44, 40))
+    cube = np.stack([r, g, b], axis=0).astype("float32")  # (3, H, W)
+    fp = tmp_path / "bordered_master.fit"
+    fits.writeto(fp, cube)
+    return fp, (h, w)
+
+
+def _png_size(path):
+    from PIL import Image
+
+    with Image.open(path) as im:
+        return im.size  # (width, height)
+
+
+def test_make_preview_autocrop(tmp_path):
+    from seestar_refine.preview import make_preview
+
+    fp, (h, w) = _make_bordered_fits(tmp_path)
+
+    cropped = make_preview(
+        fp, tmp_path / "cropped.png", params={"autocrop": True}
+    )
+    assert cropped["ok"] is True
+    box = cropped["stats"]["crop_bbox"]
+    r0, r1, c0, c1 = box
+    # The crop bbox is strictly smaller than the full frame.
+    assert (r1 - r0) < h and (c1 - c0) < w
+    assert cropped["stats"]["cropped_shape"][0] == (r1 - r0)
+    assert cropped["stats"]["cropped_shape"][1] == (c1 - c0)
+    cw, ch = _png_size(tmp_path / "cropped.png")
+    assert cw == (c1 - c0) and ch == (r1 - r0)
+
+    full = make_preview(
+        fp, tmp_path / "full.png", params={"autocrop": False}
+    )
+    assert full["ok"] is True
+    fw, fh = _png_size(tmp_path / "full.png")
+    assert fw == w and fh == h
+
+
+def test_make_preview_autocrop_default_noop_on_full_valid(tmp_path):
+    from astropy.io import fits
+
+    from seestar_refine.preview import make_preview
+
+    # Uniformly bright, borderless master: nothing is below the auto threshold
+    # boundary, so autocrop is a no-op (empty mask -> full frame returned).
+    d = np.full((48, 48), 1000.0, dtype="float32")
+    fp = tmp_path / "full_valid.fit"
+    fits.writeto(fp, d)
+
+    r = make_preview(fp, tmp_path / "prev.png")  # autocrop defaults True
+    assert r["ok"] is True
+    # A full-valid image crops to itself (allowing the inward margin).
+    box = r["stats"]["crop_bbox"]
+    r0, r1, c0, c1 = box
+    assert r0 <= 2 and c0 <= 2 and r1 >= 46 and c1 >= 46
+
+
 def test_make_preview_color_balance_reduces_green(tmp_path):
     from seestar_refine.preview import make_preview
 
