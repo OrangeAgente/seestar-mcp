@@ -1,4 +1,4 @@
-"""FastMCP server for seestar-mcp: 18 auditable Seestar S50 control/QA tools.
+"""FastMCP server for seestar-mcp: 23 auditable Seestar S50 control/QA/planning tools.
 
 Two layers, deliberately separated for testability:
 
@@ -36,6 +36,11 @@ from mcp.server.fastmcp import FastMCP
 
 from .alpaca_client import AlpacaClient, AlpacaError, AlpacaNotImplemented
 from .data_client import DataClient
+from .planning.astro import dark_window, moon_illumination, observability
+from .planning.catalog import find_target, load_catalog
+from .planning.ranker import rank_targets
+from .planning.site import SiteProfile, load_site, save_site
+from .planning.weather import assess_conditions as assess_conditions_weather
 from .provenance import ProvenanceLog, SessionManifest
 from .qa_tier1 import Tier1Monitor
 from .qa_tier2 import analyze_session, write_report
@@ -529,6 +534,201 @@ class SeestarController:
         except AlpacaError as exc:
             return _err(exc)
 
+    # --- planning ---------------------------------------------------------
+
+    def _site_path(self) -> Path:
+        """Path of the persisted site profile under the configured data dir."""
+        return self.settings.data_dir / "site_profile.json"
+
+    async def get_site_profile(self) -> dict:
+        """Return the persisted observing-site profile, if one has been set.
+
+        Read-only. Returns ``ok:false`` (not an error) when no profile exists so
+        the caller can prompt for one via ``set_site_profile``.
+        """
+        try:
+            self.provenance.log_call(tool="get_site_profile", args={})
+            profile = load_site(self._site_path())
+            if profile is None:
+                return {"ok": False, "error": "no site profile set — use set_site_profile"}
+            return {"ok": True, "profile": dataclasses.asdict(profile)}
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    async def set_site_profile(
+        self,
+        name: str,
+        lat: float,
+        lon: float,
+        elevation_m: float = 0.0,
+        bortle: int | None = None,
+        sqm: float | None = None,
+        horizon_mask: list[list[float]] | None = None,
+        min_altitude_deg: float = 20.0,
+        field_rotation_ceiling_deg: float = 60.0,
+    ) -> dict:
+        """Persist the observing-site profile used by every planning tool.
+
+        Records position, sky-darkness (Bortle/SQM), a horizon mask
+        (``[[az_min, az_max, alt_min], ...]``) and the usable-altitude band.
+        Writes JSON under the data dir; no device motion.
+        """
+        try:
+            self.provenance.log_call(
+                tool="set_site_profile",
+                args={
+                    "name": name,
+                    "lat": lat,
+                    "lon": lon,
+                    "elevation_m": elevation_m,
+                    "bortle": bortle,
+                    "sqm": sqm,
+                    "min_altitude_deg": min_altitude_deg,
+                    "field_rotation_ceiling_deg": field_rotation_ceiling_deg,
+                },
+            )
+            mask = [tuple(arc) for arc in (horizon_mask or [])]
+            profile = SiteProfile(
+                name=name,
+                lat_deg=lat,
+                lon_deg=lon,
+                elevation_m=elevation_m,
+                bortle=bortle,
+                sqm=sqm,
+                horizon_mask=mask,
+                min_altitude_deg=min_altitude_deg,
+                field_rotation_ceiling_deg=field_rotation_ceiling_deg,
+            )
+            save_site(profile, self._site_path())
+            return {"ok": True, "profile": dataclasses.asdict(profile)}
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    async def assess_conditions(self, date: str | None = None) -> dict:
+        """Go/no-go sky verdict for tonight: weather + moon over the dark window.
+
+        Reads the clock only to resolve "tonight" when ``date`` is omitted. A
+        weather outage degrades to ``go=None`` (non-fatal); planning still runs.
+        """
+        from datetime import datetime, timezone
+
+        try:
+            self.provenance.log_call(tool="assess_conditions", args={"date": date})
+            when = date or datetime.now(timezone.utc).isoformat()
+            site = load_site(self._site_path())
+            if site is None:
+                return {"ok": False, "error": "no site profile set"}
+            window = dark_window(site, when)
+            illum = moon_illumination(when)
+            assessment = await assess_conditions_weather(site, window, illum)
+            return {"ok": True, **dataclasses.asdict(assessment)}
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    async def get_target_observability(
+        self, target: str, date: str | None = None
+    ) -> dict:
+        """Observability of one named DSO tonight (altitude, sweet band, moon).
+
+        Reads the clock only to resolve "tonight" when ``date`` is omitted.
+        Read-only; no device motion.
+        """
+        from datetime import datetime, timezone
+
+        try:
+            self.provenance.log_call(
+                tool="get_target_observability",
+                args={"target": target, "date": date},
+            )
+            when = date or datetime.now(timezone.utc).isoformat()
+            site = load_site(self._site_path())
+            if site is None:
+                return {"ok": False, "error": "no site profile set"}
+            t = find_target(target)
+            if t is None:
+                return {"ok": False, "error": f"unknown target: {target}"}
+            obs = observability(site, t, when)
+            return {
+                "ok": True,
+                "target": dataclasses.asdict(t),
+                "observability": dataclasses.asdict(obs),
+            }
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    async def plan_targets(
+        self,
+        date: str | None = None,
+        types: list[str] | None = None,
+        min_alt: float | None = None,
+        limit: int = 10,
+    ) -> dict:
+        """Rank tonight's best DSO targets — a scored, reasoned shortlist.
+
+        Reads the clock only to resolve "tonight" when ``date`` is omitted.
+        Returns a compact per-target summary (id/name/type/score/reasons/window
+        + key observability numbers) rather than the full nested record.
+        """
+        from datetime import datetime, timezone
+
+        try:
+            self.provenance.log_call(
+                tool="plan_targets",
+                args={
+                    "date": date,
+                    "types": types,
+                    "min_alt": min_alt,
+                    "limit": limit,
+                },
+            )
+            when = date or datetime.now(timezone.utc).isoformat()
+            site = load_site(self._site_path())
+            if site is None:
+                return {"ok": False, "error": "no site profile set"}
+            illum = moon_illumination(when)
+            window = dark_window(site, when)
+            conditions = await assess_conditions_weather(site, window, illum)
+            plans = rank_targets(
+                site,
+                when,
+                load_catalog(),
+                conditions,
+                types=types,
+                min_alt=min_alt,
+                limit=limit,
+            )
+            return {
+                "ok": True,
+                "conditions": {
+                    "go": conditions.go,
+                    "suitability": conditions.suitability,
+                    "source": conditions.source,
+                },
+                "count": len(plans),
+                "targets": [
+                    {
+                        "id": p.target.id,
+                        "name": p.target.name,
+                        "type": p.target.type,
+                        "score": p.score,
+                        "reasons": p.reasons,
+                        "best_window_utc": p.best_window_utc,
+                        "recommended_subs": p.recommended_subs,
+                        "recommended_exposure_s": p.recommended_exposure_s,
+                        "framing_note": p.framing_note,
+                        "max_alt_deg": round(p.observability.max_alt_deg, 1),
+                        "transit_utc": p.observability.transit_utc,
+                        "sweet_band_min": round(
+                            p.observability.dark_minutes_in_sweet_band
+                        ),
+                        "moon_sep_deg": round(p.observability.moon_sep_deg, 1),
+                    }
+                    for p in plans
+                ],
+            }
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
     # --- lifecycle --------------------------------------------------------
 
     async def aclose(self) -> None:
@@ -773,6 +973,85 @@ async def qa_session_report(
     keep-list and the artifact paths.
     """
     return await get_controller().qa_session_report(target, paths)
+
+
+@mcp.tool()
+async def get_site_profile() -> dict:
+    """Return the saved observing-site profile (position, Bortle, horizon mask).
+
+    Read-only. Returns ``ok:false`` if no profile has been set yet.
+    """
+    return await get_controller().get_site_profile()
+
+
+@mcp.tool()
+async def set_site_profile(
+    name: str,
+    lat: float,
+    lon: float,
+    elevation_m: float = 0.0,
+    bortle: int | None = None,
+    sqm: float | None = None,
+    horizon_mask: list[list[float]] | None = None,
+    min_altitude_deg: float = 20.0,
+    field_rotation_ceiling_deg: float = 60.0,
+) -> dict:
+    """Save the observing-site profile every planning tool reads.
+
+    SIDE EFFECT: writes a JSON profile to local storage. Captures position,
+    sky darkness (Bortle/SQM), a horizon mask ``[[az_min, az_max, alt_min], ...]``
+    and the usable-altitude sweet band. No device motion.
+    """
+    return await get_controller().set_site_profile(
+        name,
+        lat,
+        lon,
+        elevation_m,
+        bortle,
+        sqm,
+        horizon_mask,
+        min_altitude_deg,
+        field_rotation_ceiling_deg,
+    )
+
+
+@mcp.tool()
+async def assess_conditions(date: str | None = None) -> dict:
+    """Go/no-go sky verdict for tonight from weather + moon over the dark window.
+
+    Read-only. Only external call is one HTTPS GET to Open-Meteo; a weather
+    outage is non-fatal (``go=null`` — assess the sky manually). ``date`` (ISO
+    UTC) overrides "tonight". Every verdict is reason-tagged.
+    """
+    return await get_controller().assess_conditions(date)
+
+
+@mcp.tool()
+async def get_target_observability(target: str, date: str | None = None) -> dict:
+    """Observability of one named DSO tonight: altitude, sweet-band time, moon.
+
+    Read-only, offline (deterministic astropy ephemeris). ``target`` is a
+    catalog id or common name (e.g. ``"M27"`` / ``"Dumbbell Nebula"``); ``date``
+    (ISO UTC) overrides "tonight".
+    """
+    return await get_controller().get_target_observability(target, date)
+
+
+@mcp.tool()
+async def plan_targets(
+    date: str | None = None,
+    types: list[str] | None = None,
+    min_alt: float | None = None,
+    limit: int = 10,
+) -> dict:
+    """Rank tonight's best DSO targets for the Seestar given site, sky conditions,
+    moon, light pollution, and alt-az field rotation. Returns a scored, reasoned
+    shortlist.
+
+    Read-only. Optionally filter by ``types`` and ``min_alt`` and cap the count
+    with ``limit``. ``date`` (ISO UTC) overrides "tonight".
+    """
+    return await get_controller().plan_targets(date, types, min_alt, limit)
 
 
 def main() -> None:
