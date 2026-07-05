@@ -114,6 +114,25 @@ def field_rotation_rate(lat_deg: float, az_deg: float, alt_deg: float) -> float:
     return abs(15.041 * cos(radians(lat_deg)) * cos(radians(az_deg)) / cos_alt)
 
 
+def azalt_at(
+    site: SiteProfile, target: DsoTarget, when_utc: str | Time
+) -> tuple[float, float]:
+    """Return the target's ``(azimuth_deg, altitude_deg)`` at a single UTC instant.
+
+    A pure, single-sample counterpart to :func:`observability`: it builds the
+    site's :class:`AltAz` frame at ``when_utc`` and transforms the target's J2000
+    :class:`SkyCoord` into it. Used by ``log_sky_result`` to derive the pointing
+    when the caller names a target instead of passing explicit az/alt.
+    Deterministic in ``when_utc`` (no clock read).
+    """
+    t = _to_time(when_utc)
+    loc = _location(site)
+    altaz = AltAz(obstime=t, location=loc)
+    coord = SkyCoord(ra=target.ra_deg, dec=target.dec_deg, unit="deg")
+    pointing = coord.transform_to(altaz)
+    return float(pointing.az.deg), float(pointing.alt.deg)
+
+
 def moon_illumination(when_utc: str | Time) -> float:
     """Illuminated fraction of the Moon (0..1) at a single UTC instant.
 

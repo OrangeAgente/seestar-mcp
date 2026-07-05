@@ -54,13 +54,13 @@ async def _tool_names() -> set[str]:
 def test_planning_tools_registered():
     names = asyncio.run(_tool_names())
     assert PLANNING_TOOLS <= names
-    assert len(asyncio.run(mcp.list_tools())) == 30
+    assert len(asyncio.run(mcp.list_tools())) == 33
 
 
 def test_project_tools_registered():
     names = asyncio.run(_tool_names())
     assert PROJECT_TOOLS <= names
-    assert len(asyncio.run(mcp.list_tools())) == 30
+    assert len(asyncio.run(mcp.list_tools())) == 33
 
 
 def test_goal_then_log_then_get(tmp_path):
@@ -278,7 +278,7 @@ DARK = ("2026-07-05T02:00:00Z", "2026-07-05T08:00:00Z")
 def test_autonomous_tools_registered():
     names = asyncio.run(_tool_names())
     assert AUTONOMOUS_TOOLS <= names
-    assert len(asyncio.run(mcp.list_tools())) == 30
+    assert len(asyncio.run(mcp.list_tools())) == 33
 
 
 def test_simulate_night_issues_no_motion(tmp_path, monkeypatch):
@@ -470,3 +470,81 @@ def test_simulate_night_surfaces_location(tmp_path, monkeypatch):
     r = asyncio.run(c.simulate_night())
     assert r["ok"] is True
     assert r["location"]["mask_applied"] is False
+
+
+# --- Learned-obstruction tools (log / suggest / add horizon mask) ------------
+
+OBSTRUCTION_TOOLS = {"log_sky_result", "suggest_horizon_mask", "add_horizon_mask"}
+
+
+def test_obstruction_tools_registered():
+    names = asyncio.run(_tool_names())
+    assert OBSTRUCTION_TOOLS <= names
+    assert len(asyncio.run(mcp.list_tools())) == 33
+
+
+def test_add_horizon_mask_appends(tmp_path):
+    c = _controller(tmp_path)
+    assert asyncio.run(c.set_site_profile(name="Yard", lat=40.0, lon=-74.0))["ok"]
+
+    r = asyncio.run(c.add_horizon_mask(45, 135, 25))
+    assert r["ok"] is True
+
+    g = asyncio.run(c.get_site_profile())
+    masks = [list(m) for m in g["profile"]["horizon_mask"]]
+    assert [45.0, 135.0, 25.0] in masks
+
+
+def test_log_then_suggest(tmp_path):
+    # log_sky_result can't vary the night (it stamps datetime.now); drive the
+    # underlying record_sky_result directly with distinct nights, writing to the
+    # controller's own sky-log path, then assert suggest_horizon_mask surfaces it.
+    from seestar_mcp.planning.obstructions import record_sky_result
+
+    c = _controller(tmp_path)
+    assert asyncio.run(c.set_site_profile(name="Yard", lat=40.0, lon=-74.0))["ok"]
+    p = c._sky_log_path()
+    for night in ("2026-07-04", "2026-07-05", "2026-07-06", "2026-07-07"):
+        record_sky_result(
+            92.0, 22.0, ok=False, weather_ok=True,
+            now_utc=f"{night}T04:00:00Z", lat=40.0, lon=-74.0, path=p,
+        )
+        record_sky_result(
+            60.0, 22.0, ok=True, weather_ok=True,
+            now_utc=f"{night}T04:10:00Z", lat=40.0, lon=-74.0, path=p,
+        )
+
+    r = asyncio.run(c.suggest_horizon_mask())
+    assert r["ok"] is True
+    assert r["count"] >= 1
+    assert any(
+        cand["az_min_deg"] <= 92 <= cand["az_max_deg"] and cand["alt_min_deg"] >= 20
+        for cand in r["candidates"]
+    )
+
+
+def test_log_sky_result_needs_target_or_azalt(tmp_path):
+    c = _controller(tmp_path)
+    assert asyncio.run(c.set_site_profile(name="Yard", lat=40.0, lon=-74.0))["ok"]
+    r = asyncio.run(c.log_sky_result())
+    assert r["ok"] is False
+    assert "target" in r["error"].lower() or "az" in r["error"].lower()
+
+
+def test_log_sky_result_explicit_azalt_ok(tmp_path):
+    c = _controller(tmp_path)
+    assert asyncio.run(c.set_site_profile(name="Yard", lat=40.0, lon=-74.0))["ok"]
+    r = asyncio.run(c.log_sky_result(az=90, alt=25, solved=True, weather_go=True))
+    assert r["ok"] is True
+    assert r["az"] == 90.0
+    assert r["alt"] == 25.0
+    assert r["solved"] is True
+    assert r["weather_ok"] is True
+    assert (tmp_path / "sky_failures.json").exists()
+
+
+def test_suggest_horizon_mask_no_site(tmp_path):
+    c = _controller(tmp_path)
+    r = asyncio.run(c.suggest_horizon_mask())
+    assert r["ok"] is False
+    assert "site" in r["error"].lower()

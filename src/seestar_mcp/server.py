@@ -1,4 +1,4 @@
-"""FastMCP server for seestar-mcp: 30 auditable Seestar S50 control/QA/planning tools.
+"""FastMCP server for seestar-mcp: 33 auditable Seestar S50 control/QA/planning tools.
 
 Two layers, deliberately separated for testability:
 
@@ -36,10 +36,14 @@ from mcp.server.fastmcp import FastMCP
 
 from .alpaca_client import AlpacaClient, AlpacaError, AlpacaNotImplemented
 from .data_client import DataClient
-from .planning.astro import dark_window, moon_illumination, observability
+from .planning.astro import azalt_at, dark_window, moon_illumination, observability
 from .planning.autonomous import evaluate_guardrails, plan_night
 from .planning.catalog import find_target, load_catalog
-from .planning.obstructions import location_status
+from .planning.obstructions import (
+    location_status,
+    record_sky_result,
+    suggest_obstructions,
+)
 from .planning.projects import (
     get_project as _get_project,
     load_projects,
@@ -553,6 +557,10 @@ class SeestarController:
         """Path of the persisted projects/history store under the data dir."""
         return self.settings.data_dir / "projects.json"
 
+    def _sky_log_path(self) -> Path:
+        """Path of the local weather-gated sky-failure histogram under the data dir."""
+        return self.settings.data_dir / "sky_failures.json"
+
     async def _current_gps(self) -> tuple[float, float] | None:
         """Best-effort scope GPS ``(lat, lon)`` from ``get_device_state``; None if
         unavailable.
@@ -826,6 +834,133 @@ class SeestarController:
                     for p in plans
                 ],
             }
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    # --- learned horizon mask (obstruction inference) ---------------------
+
+    async def log_sky_result(
+        self,
+        target: str | None = None,
+        az: float | None = None,
+        alt: float | None = None,
+        solved: bool = True,
+        weather_go: bool | None = None,
+    ) -> dict:
+        """Record one plate-solve outcome into the weather-gated obstruction log.
+
+        The pointing is taken from explicit ``az``/``alt`` when given, else derived
+        from ``target`` (catalog + saved site) at *now*. Bad-weather failures are
+        excluded from obstruction inference (see :func:`record_sky_result`). Reads
+        the clock only for the record's timestamp. Writes the local sky-failure
+        histogram; no device motion.
+        """
+        try:
+            self.provenance.log_call(
+                tool="log_sky_result",
+                args={
+                    "target": target,
+                    "az": az,
+                    "alt": alt,
+                    "solved": solved,
+                    "weather_go": weather_go,
+                },
+            )
+            now = datetime.now(timezone.utc).isoformat()
+            site = load_site(self._site_path())
+            if site is None:
+                return {"ok": False, "error": "no site profile set"}
+
+            if az is None or alt is None:
+                if not target:
+                    return {
+                        "ok": False,
+                        "error": "need target+site or explicit az/alt",
+                    }
+                t = find_target(target)
+                if t is None:
+                    return {"ok": False, "error": f"unknown target: {target}"}
+                az, alt = azalt_at(site, t, now)
+
+            if weather_go is None:
+                # Best-effort weather read so a bad-sky failure is not mislearnt as
+                # an obstruction; an outage leaves weather_go None (counts as ok).
+                try:
+                    weather_go = (
+                        await assess_conditions_weather(
+                            site, dark_window(site, now), 0.0
+                        )
+                    ).go
+                except Exception:  # noqa: BLE001 - weather outage is non-fatal
+                    weather_go = None
+
+            weather_ok = weather_go is not False
+            record_sky_result(
+                az,
+                alt,
+                ok=bool(solved),
+                weather_ok=weather_ok,
+                now_utc=now,
+                lat=site.lat_deg,
+                lon=site.lon_deg,
+                path=self._sky_log_path(),
+            )
+            return {
+                "ok": True,
+                "az": round(az, 1),
+                "alt": round(alt, 1),
+                "solved": bool(solved),
+                "weather_ok": weather_ok,
+            }
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    async def suggest_horizon_mask(self) -> dict:
+        """Suggest horizon-mask arcs learned from cross-night, weather-gated fails.
+
+        READ-ONLY: inference only — it never edits the saved mask (use
+        ``add_horizon_mask`` to accept a suggestion). Location-scoped to the saved
+        site so obstructions learned elsewhere never surface here.
+        """
+        try:
+            self.provenance.log_call(tool="suggest_horizon_mask", args={})
+            site = load_site(self._site_path())
+            if site is None:
+                return {"ok": False, "error": "no site profile set"}
+            cands = suggest_obstructions(
+                self._sky_log_path(),
+                cur_lat=site.lat_deg,
+                cur_lon=site.lon_deg,
+                location_tolerance_km=getattr(site, "location_tolerance_km", 1.0),
+            )
+            return {
+                "ok": True,
+                "candidates": [dataclasses.asdict(c) for c in cands],
+                "count": len(cands),
+            }
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    async def add_horizon_mask(
+        self, az_min: float, az_max: float, alt_min: float
+    ) -> dict:
+        """Append one horizon-mask arc to the saved site profile (user confirm step).
+
+        SIDE EFFECT: persists an added ``(az_min, az_max, alt_min)`` arc to the
+        site profile — the ONLY path that edits the mask, always by explicit user
+        action (suggestions never auto-apply).
+        """
+        try:
+            self.provenance.log_call(
+                tool="add_horizon_mask",
+                args={"az_min": az_min, "az_max": az_max, "alt_min": alt_min},
+            )
+            site = load_site(self._site_path())
+            if site is None:
+                return {"ok": False, "error": "no site profile set"}
+            site.horizon_mask.append((float(az_min), float(az_max), float(alt_min)))
+            save_site(site, self._site_path())
+            return {"ok": True, "profile": dataclasses.asdict(site)}
         except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
             return {"ok": False, "error": str(exc)}
 
@@ -1528,6 +1663,45 @@ async def check_night_guardrails(
     return await get_controller().check_night_guardrails(
         session_start_utc, max_session_hours, battery_floor_pct, dawn_margin_min
     )
+
+
+@mcp.tool()
+async def log_sky_result(
+    target: str | None = None,
+    az: float | None = None,
+    alt: float | None = None,
+    solved: bool = True,
+    weather_go: bool | None = None,
+) -> dict:
+    """Log one plate-solve outcome so the learner can infer fixed obstructions.
+
+    SIDE EFFECT: appends to the local weather-gated sky-failure histogram (no
+    device motion). Pass explicit ``az``/``alt`` or a ``target`` (resolved against
+    the saved site at now). ``solved=False`` records a failure; bad-weather
+    failures (``weather_go=False``) are excluded from obstruction inference.
+    """
+    return await get_controller().log_sky_result(target, az, alt, solved, weather_go)
+
+
+@mcp.tool()
+async def suggest_horizon_mask() -> dict:
+    """Suggest horizon-mask arcs learned from cross-night, weather-gated failures.
+
+    READ-ONLY: returns candidate arcs with their evidence but NEVER edits the
+    saved mask. Location-scoped to the saved site. Confirm a suggestion by calling
+    ``add_horizon_mask`` explicitly.
+    """
+    return await get_controller().suggest_horizon_mask()
+
+
+@mcp.tool()
+async def add_horizon_mask(az_min: float, az_max: float, alt_min: float) -> dict:
+    """Append one horizon-mask arc to the saved site profile (user confirm step).
+
+    SIDE EFFECT: persists the ``(az_min, az_max, alt_min)`` arc to the site
+    profile. This is the ONLY way the mask changes — suggestions never auto-apply.
+    """
+    return await get_controller().add_horizon_mask(az_min, az_max, alt_min)
 
 
 def main() -> None:

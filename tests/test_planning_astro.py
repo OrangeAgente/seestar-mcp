@@ -6,6 +6,7 @@ All calls take an explicit ``when_utc`` so the results are reproducible.
 """
 
 from seestar_mcp.planning.astro import (
+    azalt_at,
     dark_window,
     field_rotation_rate,
     moon_illumination,
@@ -43,3 +44,14 @@ def test_moon_illumination_is_a_fraction():
     # Illuminated fraction is always a physical 0..1 value at any instant.
     frac = moon_illumination("2026-07-05T04:00:00Z")
     assert 0.0 <= frac <= 1.0
+
+
+def test_azalt_at_single_instant_matches_transit():
+    # The single-instant az/alt helper must agree with the observability engine:
+    # evaluated at the target's transit time it returns the max altitude.
+    site = SiteProfile(name="x", lat_deg=40.0, lon_deg=-74.0)
+    t = find_target("M27")
+    obs = observability(site, t, "2026-07-05T04:00:00Z")
+    az, alt = azalt_at(site, t, obs.transit_utc)
+    assert 0.0 <= az <= 360.0
+    assert abs(alt - obs.max_alt_deg) < 0.5
