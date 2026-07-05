@@ -139,3 +139,62 @@ async def test_get_status_never_raises_on_error():
     result = await ctrl.get_status()
     assert result["ok"] is False
     assert result["error_number"] == 1099
+
+
+async def test_get_view_state_native_error_maps_to_ok_false():
+    # When idle/slow, seestar_alp tunnels a native "Error: ..." result string
+    # inside an otherwise-ok Alpaca envelope. Surface it as ok:false.
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = {
+        "method": "get_view_state",
+        "params": [],
+        "result": "Error: Exceeded allotted wait time for result",
+    }
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    result = await ctrl.get_view_state()
+    assert result["ok"] is False
+    assert "Error" in result["error"]
+    assert result["raw"]["result"].startswith("Error")
+
+
+async def test_plate_solve_native_error_string_maps_to_ok_false():
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = "Error: solve failed"
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    result = await ctrl.plate_solve()
+    assert result["ok"] is False
+    assert "Error" in result["error"]
+
+
+async def test_get_focuser_position_native_error_maps_to_ok_false():
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = {"result": "Error: no focuser"}
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    result = await ctrl.get_focuser_position()
+    assert result["ok"] is False
+
+
+async def test_view_state_transport_error_returns_ok_false():
+    from seestar_mcp.alpaca_client import AlpacaTransportError
+
+    alpaca = AsyncMock()
+    alpaca.method_sync.side_effect = AlpacaTransportError(
+        -1, "Connection refused", "action"
+    )
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    result = await ctrl.get_view_state()  # must not raise
+    assert result["ok"] is False
+    assert result["error_number"] == -1
+
+
+async def test_get_status_transport_error_returns_ok_false():
+    from seestar_mcp.alpaca_client import AlpacaTransportError
+
+    alpaca = AsyncMock()
+    alpaca.get_connected.side_effect = AlpacaTransportError(
+        -1, "Connection refused", "connected"
+    )
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    result = await ctrl.get_status()  # must not raise past method-level guard
+    assert result["ok"] is False
+    assert result["error_number"] == -1

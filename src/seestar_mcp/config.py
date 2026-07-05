@@ -32,11 +32,12 @@ class Settings(BaseSettings):
 
     # --- seestar_alp ASCOM Alpaca server ---
     alpaca_base_url: str = "http://127.0.0.1:5555"
-    # GOTCHA: The Alpaca device index in URLs is 0, but seestar_alp's own
-    # config.toml numbers the first scope as device_num = 1. We deliberately use
-    # the Alpaca index (0) here because that is what the HTTP endpoints expect
-    # (e.g. /api/v1/telescope/0/...). Do not "correct" this to 1.
-    alpaca_device_num: int = 0
+    # seestar_alp registers the scope at the Alpaca device number equal to its
+    # config ``device_num``; the shipped example uses ``1``, so a standard
+    # single-scope install is Alpaca device 1 (e.g. /api/v1/telescope/1/...).
+    # Override via ``SEESTAR_ALPACA_DEVICE_NUM`` if your seestar_alp config uses
+    # a different number.
+    alpaca_device_num: int = 1
 
     # --- Seestar device on the LAN ---
     seestar_host: str = "127.0.0.1"  # Seestar LAN IP (station mode, DHCP reservation)
