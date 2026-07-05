@@ -88,9 +88,9 @@ The firmware-7.18+ RSA key and any tokens live in `./secrets/` (gitignored) or i
 `SEESTAR_SECRET_*` environment variables, loaded on demand by `secrets.py` and never written
 to config, source, or the provenance log.
 
-## Tools (18)
+## Tools (23)
 
-The server exposes exactly 18 single-purpose, least-privilege tools with honest,
+The server exposes exactly 23 single-purpose, least-privilege tools with honest,
 non-obfuscated descriptions. Destructive/motion tools are clearly labelled `SIDE EFFECT` in
 their descriptions; Skills gate them behind explicit user confirmation.
 
@@ -127,6 +127,31 @@ their descriptions; Skills gate them behind explicit user confirmation.
 | `qa_tier2` | Score RAW subs PASS/MARGINAL/REJECT with per-sub reasons + keep-list. Read-only. |
 | `qa_session_report` | Score subs, then WRITE a JSON+Markdown report and session manifest. |
 
+### Planning
+
+Local-computation tools for the pre-session observing planner (deterministic astropy
+ephemeris + a bundled DSO catalog; only `assess_conditions` reaches the network, for
+weather). Read-only except `set_site_profile`, which writes the site profile.
+
+| Tool | Description |
+|---|---|
+| `get_site_profile` | Return the stored observing site profile (or note that none is set). Read-only. |
+| `set_site_profile` | Create/update the site profile (lat/lon, elevation, Bortle, horizon mask, min altitude). |
+| `assess_conditions` | Weather + moon + astronomical twilight → go/no-go verdict + reasons + dark window. |
+| `get_target_observability` | Deep-dive one target → full observability (sweet-band time, transit, moon, framing) + recommended subs. Read-only. |
+| `plan_targets` | Ranked, reasoned target shortlist with best windows and recommended integration. Read-only. |
+
+## Observing planner
+
+Set a site profile once (`set_site_profile` with your lat/lon and, if you know it,
+Bortle), then ask to plan a night. `assess_conditions` gives a one-line go/no-go from
+weather + moon + twilight, and `plan_targets` returns a ranked shortlist optimized for
+*clean* alt-az data (field-rotation sweet-band time, light-pollution fit, moon
+separation, FOV framing) — every score is reason-tagged. With no profile, the tools
+fall back to the scope's GPS and a default Bortle. Weather is the only external call
+(`api.open-meteo.com`, keyless) and a failure is non-fatal. The **`observing-planner`**
+skill drives this flow and hands the chosen target to `run-session`.
+
 ## Skills
 
 **MCP is the access layer; Skills are the procedure layer.** The MCP server gives Claude the
@@ -139,6 +164,9 @@ ability to reach the telescope, the FITS files, and the QA computations; the Ski
   PASS / MARGINAL / REJECT.
 - **`anomaly-playbook`** — the fault decision tree (clouds, dew, focus drift, tracking loss,
   connection drops).
+- **`observing-planner`** — the pre-session planner: a go/no-go conditions verdict and a
+  ranked, reasoned target shortlist (best window + recommended integration), then hands the
+  chosen target to `run-session`.
 
 Skills stay at roughly ~100 tokens of description until they are invoked, so they add almost
 no standing context cost, while the MCP server is deliberately kept lean and single-purpose.

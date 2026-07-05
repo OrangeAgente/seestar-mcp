@@ -100,6 +100,44 @@ def test_transits_above_ceiling_gets_field_rotation_reason():
     assert "ceiling" in joined
 
 
+def test_sweet_band_target_has_no_sub_trail_reason():
+    # A sweet-band target that never transits above the ceiling must NOT be
+    # tagged "subs trail near transit" — that note is gated on near-zenith
+    # transits (real hardware banks clean 10 s subs well below the ceiling).
+    site = SiteProfile(name="x", lat_deg=40, lon_deg=-74, bortle=6)
+    cat = [DsoTarget("A", "A", 0, 0, "emission_nebula", 20, 7)]
+    plans = rank_targets(
+        site,
+        "2026-07-05T04:00:00Z",
+        cat,
+        _cond(),
+        observability_fn=lambda s, t, w: _obs(
+            90, above_ceiling=False, usable_sub_minutes=0.0
+        ),
+    )
+    assert len(plans) == 1
+    joined = " ".join(plans[0].reasons).lower()
+    assert "subs trail" not in joined
+
+
+def test_above_ceiling_target_gets_sub_trail_reason():
+    # Near-zenith (above-ceiling) transit still gets both the field-rotation
+    # reason and the sub-trail note.
+    site = SiteProfile(name="x", lat_deg=40, lon_deg=-74, bortle=6)
+    cat = [DsoTarget("A", "A", 0, 0, "emission_nebula", 20, 7)]
+    plans = rank_targets(
+        site,
+        "2026-07-05T04:00:00Z",
+        cat,
+        _cond(),
+        observability_fn=lambda s, t, w: _obs(90, above_ceiling=True),
+    )
+    assert len(plans) == 1
+    joined = " ".join(plans[0].reasons).lower()
+    assert "field rotation" in joined
+    assert "subs trail" in joined
+
+
 def test_recommended_subs_is_sweet_band_seconds_over_exposure():
     site = SiteProfile(name="x", lat_deg=40, lon_deg=-74, bortle=6)
     cat = [DsoTarget("A", "A", 0, 0, "emission_nebula", 20, 7)]
