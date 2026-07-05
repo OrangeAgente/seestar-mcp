@@ -77,7 +77,7 @@ All settings are overridable via environment variables with the `SEESTAR_` prefi
 | Env var | Default | Purpose |
 |---|---|---|
 | `SEESTAR_ALPACA_BASE_URL` | `http://127.0.0.1:5555` | seestar_alp ASCOM Alpaca base URL (localhost only). |
-| `SEESTAR_ALPACA_DEVICE_NUM` | `0` | Alpaca device index in URLs. Note: seestar_alp's `config.toml` numbers the first scope `1`, but the HTTP endpoints use `0` — do not "correct" this. |
+| `SEESTAR_ALPACA_DEVICE_NUM` | `1` | Alpaca device number. seestar_alp registers the scope at the Alpaca number equal to its `config.toml` `device_num`; its shipped example uses `1`, so a standard single-scope install is device `1` (verified on real hardware). Override if your seestar_alp config numbers the scope differently. |
 | `SEESTAR_SEESTAR_HOST` | `127.0.0.1` | Seestar LAN IP (station mode, DHCP reservation) for data pulls. |
 | `SEESTAR_BIND_HOST` | `127.0.0.1` | Bind address. Defaults to localhost; a validator warns if set to a public/routable address. Never make it public. |
 | `SEESTAR_DATA_DIR` | `./data` | Local data directory (downloaded subs, provenance log, manifests). |
@@ -87,6 +87,20 @@ All binds default to **localhost** and must never be public. **Secrets never go 
 The firmware-7.18+ RSA key and any tokens live in `./secrets/` (gitignored) or in
 `SEESTAR_SECRET_*` environment variables, loaded on demand by `secrets.py` and never written
 to config, source, or the provenance log.
+
+### Local state (all under `SEESTAR_DATA_DIR`, gitignored)
+
+| File | Written by | Purpose |
+|---|---|---|
+| `provenance.jsonl` | every tool call | append-only audit log (redacted; no secrets). |
+| `manifests/`, `reports/` | `qa_session_report` | per-session QA manifest + JSON/Markdown reports. |
+| `site_profile.json` | `set_site_profile` / `add_horizon_mask` | observing site (lat/lon, Bortle, horizon mask, `location_tolerance_km`). |
+| `projects.json` | `log_session_result` / `set_project_goal` | multi-night integration goals + session history. |
+| `sky_failures.json` | `log_sky_result` | weather-gated (az,alt) plate-solve failure histogram for the learned horizon mask. |
+
+QA thresholds (all `SEESTAR_QA_*`, see `config.py`) include the scattered-light metric
+(`SEESTAR_QA_SCATTER_REJECT_SIGMA`, `SEESTAR_QA_SCATTER_MARGINAL_SIGMA`,
+`SEESTAR_QA_SCATTER_ABSOLUTE`) alongside FWHM / eccentricity / SNR / star-count.
 
 ## Tools (33)
 
