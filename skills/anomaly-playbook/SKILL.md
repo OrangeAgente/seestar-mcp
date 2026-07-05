@@ -70,6 +70,14 @@ solve).
 - If stars are present but solve fails → re-issue `goto_target` to re-acquire, then solve.
 - NEVER start or continue stacking on an unsolved field. If solve can't be recovered,
   surface to the user — likely sky conditions.
+- **Feed the obstruction learner.** After corroborating with weather (as above), log the
+  outcome with `log_sky_result(target=..., solved=False)` so the (az, alt) obstruction
+  histogram learns. It is weather-gated automatically — a failure under a no-go sky is
+  recorded weather-excluded and never counts toward an obstruction — so a genuine cloud
+  night can't wall off good sky. **Never auto-add a mask here.** A persistent low-altitude
+  bearing that keeps failing on *clear* nights is exactly what `suggest_horizon_mask`
+  surfaces at wind-down for the user to confirm via `add_horizon_mask` (see
+  `observing-planner`); a single unsolved field is just a retry.
 
 ## Symptom: autofocus fails or returns implausible position
 Likely causes: too few stars (clouds/transparency); the target field is sparse; mechanical.
