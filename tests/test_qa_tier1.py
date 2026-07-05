@@ -87,6 +87,73 @@ def test_parse_view_state_missing_keys_yield_empty():
     assert _parse_view_state({"unrelated": 1}) == {}
 
 
+# Real payload captured from a live Seestar S50 (firmware 7.75) while stacking
+# M27: stacked/dropped counts live under result.View.Stack, and the plate-solve
+# / annotation signal under result.View.Stack.Annotate.
+REAL_VIEW_STATE = {
+    "jsonrpc": "2.0",
+    "Timestamp": "420.87",
+    "method": "get_view_state",
+    "result": {
+        "View": {
+            "state": "working",
+            "lapse_ms": 283167,
+            "mode": "star",
+            "target_ra_dec": [19.993401, 22.7211],
+            "target_name": "M27 Dumbbell Nebula",
+            "lp_filter": True,
+            "gain": 80,
+            "stage": "Stack",
+            "Stack": {
+                "state": "working",
+                "lapse_ms": 32820,
+                "frame_errcode": 0,
+                "stacked_frame": 2,
+                "dropped_frame": 0,
+                "can_annotate": True,
+                "stage": "Exposure",
+                "Exposure": {"state": "working", "exp_ms": 10000.0, "port": 4700},
+                "Annotate": {
+                    "state": "complete",
+                    "result": {"annotations": [{"type": "star", "name": "14 Vul"}]},
+                },
+            },
+        }
+    },
+    "code": 0,
+    "id": 10143,
+}
+
+
+def test_parse_view_state_real_firmware_nested_stack():
+    """Firmware 7.75: counts live under result.View.Stack, not the top level."""
+    out = _parse_view_state(REAL_VIEW_STATE)
+    assert out["stacked"] == 2
+    assert out["rejected"] == 0
+    assert out["solve_ok"] is True
+
+
+def test_parse_view_state_initialise_phase_no_stack():
+    """Init phase has stage 'Initialise' and no Stack -> no counts, no crash."""
+    payload = {
+        "result": {
+            "View": {
+                "state": "working",
+                "stage": "Initialise",
+                "Initialise": {
+                    "state": "working",
+                    "DarkLibrary": {"state": "working"},
+                },
+            }
+        }
+    }
+    out = _parse_view_state(payload)
+    assert out.get("stacked") is None
+    assert out.get("rejected") is None
+    # solve_ok must NOT be forced False during Initialise.
+    assert out.get("solve_ok") is None
+
+
 def test_parse_device_state_canonical_and_alternate():
     assert _parse_device_state({"focus_pos": 1500, "tracking": True}) == {
         "focus_pos": 1500,
@@ -137,6 +204,21 @@ async def test_poll_merges_view_and_device(tmp_path):
     assert rec["tool"] == "qa_tier1.poll"
     assert rec["args"]["stacked"] == 10
     assert rec["args"]["focus_pos"] == 1500
+
+
+async def test_poll_real_firmware_payload_renders_status_line():
+    alpaca = AsyncMock()
+    alpaca.method_sync.side_effect = [REAL_VIEW_STATE, {}]
+    mon = Tier1Monitor(alpaca)
+    snap = await mon.poll()
+
+    assert snap.stacked == 2
+    assert snap.rejected == 0
+    assert snap.solve_ok is True
+
+    line = mon.status_line()
+    assert line  # non-empty
+    assert "stacked 2" in line
 
 
 async def test_poll_survives_one_failed_subcall():

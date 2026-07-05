@@ -90,6 +90,50 @@ def _unwrap(d: Any) -> dict:
     return d
 
 
+def _first_in(dicts: tuple[Any, ...], *keys: str) -> Any:
+    """Return the first present, non-None value across several dicts.
+
+    ``dicts`` are searched in order; within each, ``_first`` picks the first
+    present key.  Non-dict entries are skipped.
+    """
+    for d in dicts:
+        if isinstance(d, dict):
+            value = _first(d, *keys)
+            if value is not None:
+                return value
+    return None
+
+
+def _locate_view(d: Any) -> dict:
+    """Descend the action-tunnel wrappers to the ``View`` telemetry dict.
+
+    CONFIRMED against live Seestar S50 firmware 7.75 (2026-07-05): the native
+    ``get_view_state`` result is wrapped ``Value`` -> ``result`` -> ``View``,
+    e.g. ``{"result": {"View": {...}}}``.  We peel the ``Value``/``result``
+    wrappers (in any order, bounded) and then return the ``View`` sub-object.
+
+    Kept tolerant for other firmware / mocked shapes: if no ``View`` is found we
+    return the deepest unwrapped dict, and a plain flat dict is returned as-is.
+    """
+    if not isinstance(d, dict):
+        return {}
+    cur = d
+    for _ in range(4):  # bounded peel of Value/result wrappers
+        nxt = None
+        for wrapper in ("Value", "result"):
+            inner = cur.get(wrapper)
+            if isinstance(inner, dict):
+                nxt = inner
+                break
+        if nxt is None:
+            break
+        cur = nxt
+    view = cur.get("View")
+    if isinstance(view, dict):
+        return view
+    return cur
+
+
 def _coerce_bool(value: Any) -> bool | None:
     """Coerce a bool / number / status-string into a tri-state bool."""
     if value is None:
@@ -130,39 +174,67 @@ def _as_float(value: Any) -> float | None:
 def _parse_view_state(d: dict) -> dict:
     """Parse ``get_view_state`` telemetry: stacking, rejection, solve, HFD.
 
-    Key names are tolerant/unconfirmed.  # FIRMWARE-DEPENDENT
+    CONFIRMED against live Seestar S50 firmware 7.75 (2026-07-05): the real
+    payload is nested ``result.View`` with the live-stack counters under
+    ``View.Stack`` (``stacked_frame``/``dropped_frame``) and the plate-solve /
+    annotation signal under ``View.Stack.Annotate`` (``state == "complete"``).
+    The overall stage/state live on ``View`` (``stage``: "Initialise",
+    "Stack", ...; ``state``: "working"/"complete").
+
+    We descend into ``View`` and then ``View.Stack`` (when present), but keep
+    tolerant flat/alternate-key fallbacks so older firmware and mocked shapes
+    still parse.  # FIRMWARE-DEPENDENT (fallback spellings for other firmware)
     """
-    d = _unwrap(d)
+    view = _locate_view(d)
     out: dict[str, Any] = {}
 
+    # Overall stage/state (read from View); ``Stack`` carries the counters
+    # while stacking.  During "Initialise" there is no Stack sub-object.
+    stack = view.get("Stack")
+    if not isinstance(stack, dict):
+        stack = {}
+
+    # Counters live under View.Stack on real firmware; fall back to the View /
+    # flat level for older or mocked shapes.
     stacked = _as_int(
-        _first(d, "stacked_frame", "stacked", "stack_count", "lapse_count")
+        _first_in((stack, view), "stacked_frame", "stacked", "stack_count", "lapse_count")
     )
     if stacked is not None:
         out["stacked"] = stacked
 
-    rejected = _as_int(_first(d, "dropped_frame", "rejected", "bad_count"))
+    rejected = _as_int(_first_in((stack, view), "dropped_frame", "rejected", "bad_count"))
     if rejected is not None:
         out["rejected"] = rejected
 
-    solve_ok = _coerce_bool(_first(d, "plate_solve", "solve", "solve_state"))
+    # Plate-solve / annotation success: on firmware 7.75 this is signalled by
+    # View.Stack.Annotate.state == "complete".  Only a "complete" annotation
+    # implies solve_ok=True; anything else (working/absent, e.g. Initialise)
+    # leaves solve_ok as None -- never forced False here.
+    solve_ok: bool | None = None
+    annotate = stack.get("Annotate")
+    if isinstance(annotate, dict):
+        ann_state = annotate.get("state")
+        if isinstance(ann_state, str) and ann_state.strip().lower() == "complete":
+            solve_ok = True
+    if solve_ok is None:
+        # Tolerant fallback for older/mocked flat shapes.
+        solve_ok = _coerce_bool(
+            _first_in((stack, view), "plate_solve", "solve", "solve_state")
+        )
     if solve_ok is not None:
         out["solve_ok"] = solve_ok
 
-    solve_rms = _as_float(_first(d, "rms", "solve_rms"))
+    solve_rms = _as_float(_first_in((stack, view), "rms", "solve_rms"))
     if solve_rms is not None:
         out["solve_rms"] = solve_rms
 
     # HFD: average hfd_x/hfd_y when both present, else single value.
-    hfd_x = d.get("hfd_x")
-    hfd_y = d.get("hfd_y")
+    hfd_x = _as_float(_first_in((stack, view), "hfd_x"))
+    hfd_y = _as_float(_first_in((stack, view), "hfd_y"))
     if hfd_x is not None and hfd_y is not None:
-        fx = _as_float(hfd_x)
-        fy = _as_float(hfd_y)
-        if fx is not None and fy is not None:
-            out["hfd"] = (fx + fy) / 2
+        out["hfd"] = (hfd_x + hfd_y) / 2
     else:
-        hfd = _as_float(_first(d, "hfd", "hfd_x"))
+        hfd = _as_float(_first_in((stack, view), "hfd", "hfd_x"))
         if hfd is not None:
             out["hfd"] = hfd
 
