@@ -34,6 +34,11 @@ EXPECTED_TOOLS = {
     "qa_tier1",
     "qa_tier2",
     "qa_session_report",
+    "get_site_profile",
+    "set_site_profile",
+    "assess_conditions",
+    "get_target_observability",
+    "plan_targets",
 }
 
 # Destructive / motion / side-effecting tools that MUST state their effect.
@@ -47,10 +52,10 @@ DESTRUCTIVE = {
 }
 
 
-async def test_exactly_18_tools_with_expected_names():
+async def test_exactly_23_tools_with_expected_names():
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
-    assert len(tools) == 18
+    assert len(tools) == 23
     assert names == EXPECTED_TOOLS
 
 

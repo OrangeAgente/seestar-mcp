@@ -114,6 +114,21 @@ def field_rotation_rate(lat_deg: float, az_deg: float, alt_deg: float) -> float:
     return abs(15.041 * cos(radians(lat_deg)) * cos(radians(az_deg)) / cos_alt)
 
 
+def moon_illumination(when_utc: str | Time) -> float:
+    """Illuminated fraction of the Moon (0..1) at a single UTC instant.
+
+    Standalone counterpart to the per-target moon geometry in
+    :func:`observability`, so conditions can report the night's moon phase
+    without resolving any target. Derived from the Sun-Moon elongation:
+    ``0.5 * (1 - cos(elong))``.
+    """
+    t = _to_time(when_utc)
+    moon = get_body("moon", t)
+    sun = get_sun(t)
+    elong = moon.separation(sun).radian
+    return float(0.5 * (1.0 - np.cos(elong)))
+
+
 def _sun_alt_grid(site: SiteProfile, center: Time) -> tuple[Time, np.ndarray]:
     """Sun altitude (deg) on a +/-12h grid centred on ``center``."""
     loc = _location(site)

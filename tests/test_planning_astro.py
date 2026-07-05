@@ -5,7 +5,12 @@ derived quantities (M27 transit altitude, moon values) are pinned to tolerances.
 All calls take an explicit ``when_utc`` so the results are reproducible.
 """
 
-from seestar_mcp.planning.astro import dark_window, field_rotation_rate, observability
+from seestar_mcp.planning.astro import (
+    dark_window,
+    field_rotation_rate,
+    moon_illumination,
+    observability,
+)
 from seestar_mcp.planning.catalog import find_target
 from seestar_mcp.planning.site import SiteProfile
 
@@ -32,3 +37,9 @@ def test_dark_window_is_night():
     site = SiteProfile(name="x", lat_deg=40.0, lon_deg=-74.0)
     dusk, dawn = dark_window(site, "2026-07-05T04:00:00Z")
     assert dusk < dawn  # ISO strings compare lexically for same-format UTC
+
+
+def test_moon_illumination_is_a_fraction():
+    # Illuminated fraction is always a physical 0..1 value at any instant.
+    frac = moon_illumination("2026-07-05T04:00:00Z")
+    assert 0.0 <= frac <= 1.0
