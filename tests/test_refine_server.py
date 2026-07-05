@@ -150,6 +150,84 @@ def test_stack_keep_list_dss_not_configured(tmp_path):
     assert result["error"]
 
 
+def test_stretch_master_tool_registered():
+    names = {t.name for t in asyncio.run(mcp.list_tools())}
+    assert "stretch_master" in names
+
+
+def test_stretch_master_produces_png(tmp_path):
+    import numpy as np
+    from astropy.io import fits
+
+    d = np.random.default_rng(0).normal(1000, 50, (32, 32)).astype("float32")
+    master = tmp_path / "M27_master.fit"
+    fits.writeto(master, d)
+
+    settings = RefineSettings(
+        _env_file=None, data_dir=tmp_path, output_dir=tmp_path
+    )
+    controller = RefineController.from_settings(settings)
+    result = asyncio.run(controller.stretch_master(str(master)))
+    assert result["ok"] is True
+    assert result["preview_path"].endswith(".png")
+    from pathlib import Path
+
+    assert Path(result["preview_path"]).exists()
+    # The invocation was provenance-logged.
+    log = (tmp_path / "refine_provenance.jsonl").read_text(encoding="utf-8")
+    assert "stretch_master" in log
+
+
+def test_stack_keep_list_dss_success_auto_preview(tmp_path, monkeypatch):
+    import numpy as np
+    from astropy.io import fits
+
+    from seestar_refine import dss
+    from seestar_refine.dss import StackResult
+
+    target = "M27"
+    sub_dir = tmp_path / target
+    sub_dir.mkdir()
+    (sub_dir / "m27_sub1.fit").write_bytes(b"x")
+    (sub_dir / "m27_sub2.fit").write_bytes(b"x")
+
+    # A real FITS master so make_preview can actually load + stretch it.
+    d = np.random.default_rng(0).normal(1000, 50, (32, 32)).astype("float32")
+    master = tmp_path / "Autosave.fit"
+    fits.writeto(master, d)
+
+    canned = StackResult(
+        ok=True,
+        engine="dss",
+        target=target,
+        n_subs=2,
+        master_path=str(master),
+        preview_path=None,
+        stats={"min": 0.0, "median": 1.0, "max": 2.0, "shape": [32, 32]},
+        log="stacked",
+    )
+
+    def fake_stack(keep_list, settings, *, runner=None):
+        return canned
+
+    monkeypatch.setattr(dss, "stack", fake_stack)
+
+    settings = RefineSettings(
+        _env_file=None,
+        data_dir=tmp_path,
+        output_dir=tmp_path,
+        dss_cli="C:/DSS/DeepSkyStackerCL.exe",
+    )
+    controller = RefineController.from_settings(settings)
+    result = asyncio.run(controller.stack_keep_list(target, engine="dss"))
+
+    assert result["ok"] is True
+    assert result["preview_path"]
+    from pathlib import Path
+
+    assert Path(result["preview_path"]).exists()
+
+
 def test_stack_keep_list_wbpp_not_available_until_task4(tmp_path):
     settings = RefineSettings(
         _env_file=None, data_dir=tmp_path, output_dir=tmp_path, dss_cli="x"

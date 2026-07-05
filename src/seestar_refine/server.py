@@ -27,6 +27,7 @@ from . import dss
 from .backends import detect_backends
 from .config import RefineSettings, get_settings
 from .keeplist import KeepList, load_keep_list
+from .preview import make_preview
 
 
 def _slug(text: str) -> str:
@@ -146,6 +147,22 @@ class RefineController:
 
             # "dss" or "auto" -> DeepSkyStacker (WBPP added in Task 4).
             result = dss.stack(keep_list, self.settings)
+
+            # Best-effort auto-preview: on a successful stack with a master,
+            # write a stretched PNG next to it. A preview failure must NEVER
+            # fail the stack (log a note and carry on).
+            preview_note: str | None = None
+            if result.ok and result.master_path:
+                master = Path(result.master_path)
+                out_png = Path(self.settings.output_dir) / f"{master.stem}.png"
+                preview = make_preview(master, out_png)
+                if preview.get("ok"):
+                    result.preview_path = preview["preview_path"]
+                else:
+                    preview_note = (
+                        f"preview failed: {preview.get('error', 'unknown')}"
+                    )
+
             self.provenance.log_call(
                 tool="stack_keep_list",
                 args={
@@ -153,7 +170,9 @@ class RefineController:
                     "engine": result.engine,
                     "n_subs": result.n_subs,
                     "master_path": result.master_path,
+                    "preview_path": result.preview_path,
                 },
+                note=preview_note,
             )
             return {
                 "ok": result.ok,
@@ -161,9 +180,37 @@ class RefineController:
                 "target": result.target,
                 "n_subs": result.n_subs,
                 "master_path": result.master_path,
+                "preview_path": result.preview_path,
                 "stats": result.stats,
                 "error": result.error,
             }
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    # --- preview stretch --------------------------------------------------
+
+    async def stretch_master(
+        self, master_path: str, params: dict | None = None
+    ) -> dict:
+        """Auto-stretch a stacked master into an 8-bit PNG preview.
+
+        Delegates to :func:`seestar_refine.preview.make_preview`, writing
+        ``<output_dir>/<stem>.png``. ``params`` may carry ``black_point_sigma`` /
+        ``midtone`` overrides. Provenance-logs the invocation. Never raises.
+        """
+        try:
+            master = Path(master_path)
+            out_png = Path(self.settings.output_dir) / f"{master.stem}.png"
+            result = make_preview(master, out_png, params=params)
+            self.provenance.log_call(
+                tool="stretch_master",
+                args={
+                    "master_path": str(master),
+                    "preview_path": result.get("preview_path"),
+                    "ok": result.get("ok"),
+                },
+            )
+            return result
         except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
             return {"ok": False, "error": str(exc)}
 
@@ -216,6 +263,20 @@ async def stack_keep_list(target: str, engine: str = "auto") -> dict:
     invocation is provenance-logged.
     """
     return await get_controller().stack_keep_list(target, engine)
+
+
+@mcp.tool()
+async def stretch_master(master_path: str, params: dict | None = None) -> dict:
+    """Auto-stretch a stacked master into an 8-bit PNG preview for review.
+
+    SIDE EFFECT: WRITES a ``<stem>.png`` preview under the configured output dir.
+    Reads ``master_path`` (FITS via astropy; TIFF/other via Pillow), applies a
+    sigma-clipped midtone-transfer-function auto-stretch, and saves the PNG.
+    ``params`` optionally carries ``black_point_sigma`` / ``midtone`` overrides.
+    Returns the preview path + basic stats, or a structured error (e.g. an
+    unreadable master). The invocation is provenance-logged.
+    """
+    return await get_controller().stretch_master(master_path, params)
 
 
 def main() -> None:
