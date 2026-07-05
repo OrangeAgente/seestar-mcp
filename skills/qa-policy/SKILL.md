@@ -31,6 +31,12 @@ Every verdict should be traceable to a metric and a threshold.
 - **wFWHM (weighted FWHM)**: FWHM weighted by star count. The best single session-quality
   scalar, because a bad frame shows BOTH higher FWHM and fewer stars, and wFWHM captures
   both at once. Prefer wFWHM over raw FWHM when ranking subs within a session.
+- **scattered_light**: bright-star halo ratio + large-scale background non-uniformity — the
+  signature of thin high cirrus / scattered light that raises the background and halos bright
+  stars while barely moving FWHM. A raised local pedestal around the brightest stars plus
+  large-scale background structure both push this up; a flat dark sky sits near zero. It
+  catches the subtle veils that a uniform background-level or session-relative SNR/star-count
+  floor can miss.
 
 ## Default thresholds (configurable; state them when you apply them)
 Thresholds are relative to the session's own median, not absolute, because the S50's
@@ -58,6 +64,14 @@ Always state the threshold you used and the sub's value, e.g.:
   Reject the affected subs; the session is otherwise fine.
 - **Star count + SNR dropping together, FWHM roughly stable** → clouds/transparency, not
   focus. No focus action will help; reject the cloud-affected window.
+- **Halo ratio / background non-uniformity up, FWHM roughly stable, SNR & star-count only
+  mildly down** → thin cirrus / scattered light. This is the subtle end of the
+  clouds/transparency spectrum above: distinct from focus (which moves FWHM) and from thick
+  cloud (which collapses star count). The `scattered_light` metric is session-relative and
+  specifically catches the veils that would otherwise slip the SNR and star-count floors —
+  a faint haze that halos bright stars and softens contrast without tripping the other
+  gates. A REJECT on this axis is reason-tagged like the others (naming scattered light and
+  the threshold it crossed).
 - **Background step change mid-session** → moonrise or a light turned on. Subs may still be
   usable if SNR holds; flag for the user's judgment.
 - **Late-session eccentricity/rejection rise in Alt-Az** → field rotation. Expected.
