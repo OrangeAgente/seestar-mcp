@@ -352,3 +352,121 @@ def test_check_guardrails_no_site(tmp_path):
     r = asyncio.run(c.check_night_guardrails(session_start_utc="2026-07-05T02:30:00Z"))
     assert r["ok"] is False
     assert "site" in r["error"].lower()
+
+
+# --- Location-aware horizon mask (GPS reconcile) ----------------------------
+
+def _masked_engine(monkeypatch):
+    """Stub the astronomy/weather engine and capture the site passed to the ranker."""
+    monkeypatch.setattr(server_mod, "dark_window", lambda site, when: ("a", "b"))
+    monkeypatch.setattr(server_mod, "moon_illumination", lambda when: 0.1)
+    monkeypatch.setattr(server_mod, "load_catalog", lambda: [])
+
+    async def _fake_assess(site, window, illum):
+        return _canned_conditions()
+
+    monkeypatch.setattr(server_mod, "assess_conditions_weather", _fake_assess)
+
+    captured = {}
+
+    def _fake_rank(*a, **k):
+        captured["site"] = a[0]
+        return [_canned_plan()]
+
+    monkeypatch.setattr(server_mod, "rank_targets", _fake_rank)
+    return captured
+
+
+def _set_masked_site(c):
+    assert asyncio.run(
+        c.set_site_profile(
+            name="Yard", lat=40.0, lon=-74.0, horizon_mask=[[45.0, 135.0, 30.0]]
+        )
+    )["ok"]
+
+
+def test_plan_targets_location_within(tmp_path, monkeypatch):
+    c = _controller(tmp_path)
+    _set_masked_site(c)
+    captured = _masked_engine(monkeypatch)
+    monkeypatch.setattr(c, "_current_gps", AsyncMock(return_value=(40.0, -74.0)))
+
+    r = asyncio.run(c.plan_targets())
+    assert r["ok"] is True
+    loc = r["location"]
+    assert loc["matched"] is True
+    assert loc["mask_applied"] is True
+    assert loc["warning"] is None
+    assert loc["site_name"] == "Yard"
+    # Within tolerance: the real mask reaches the ranker.
+    assert captured["site"].horizon_mask == [(45.0, 135.0, 30.0)]
+
+
+def test_plan_targets_location_mismatch_discloses(tmp_path, monkeypatch):
+    c = _controller(tmp_path)
+    _set_masked_site(c)
+    captured = _masked_engine(monkeypatch)
+    monkeypatch.setattr(c, "_current_gps", AsyncMock(return_value=(10.0, 10.0)))
+
+    r = asyncio.run(c.plan_targets())
+    assert r["ok"] is True
+    loc = r["location"]
+    assert loc["matched"] is False
+    assert loc["mask_applied"] is False
+    assert isinstance(loc["warning"], str) and loc["warning"]
+    # Mask stripped for the engine (blocked targets NOT dropped).
+    assert captured["site"].horizon_mask == []
+    # min_altitude_deg is preserved when the mask is stripped.
+    assert captured["site"].min_altitude_deg == 20.0
+
+
+def test_location_block_gps_unavailable(tmp_path, monkeypatch):
+    c = _controller(tmp_path)
+    _set_masked_site(c)
+    _masked_engine(monkeypatch)
+    monkeypatch.setattr(c, "_current_gps", AsyncMock(return_value=None))
+
+    r = asyncio.run(c.plan_targets())
+    assert r["ok"] is True
+    loc = r["location"]
+    assert loc["matched"] is None
+    assert loc["mask_applied"] is True
+    assert loc["distance_km"] is None
+    assert "unverified" in loc["warning"].lower()
+
+
+def test_assess_conditions_surfaces_location(tmp_path, monkeypatch):
+    c = _controller(tmp_path)
+    _set_masked_site(c)
+    _masked_engine(monkeypatch)
+    monkeypatch.setattr(c, "_current_gps", AsyncMock(return_value=(10.0, 10.0)))
+
+    r = asyncio.run(c.assess_conditions())
+    assert r["ok"] is True
+    assert r["location"]["mask_applied"] is False
+
+
+def test_simulate_night_surfaces_location(tmp_path, monkeypatch):
+    c = _controller(tmp_path)
+    _set_masked_site(c)
+    monkeypatch.setattr(server_mod, "dark_window", lambda site, when: DARK)
+
+    async def _fake_plan_targets(date=None, types=None, limit=None):
+        return {
+            "ok": True,
+            "conditions": {"go": True, "suitability": 88, "source": "open-meteo"},
+            "location": {
+                "matched": False,
+                "distance_km": 42.0,
+                "site_name": "Yard",
+                "mask_applied": False,
+                "warning": "moved",
+            },
+            "targets": [],
+        }
+
+    monkeypatch.setattr(c, "plan_targets", _fake_plan_targets)
+
+    r = asyncio.run(c.simulate_night())
+    assert r["ok"] is True
+    assert r["location"]["mask_applied"] is False

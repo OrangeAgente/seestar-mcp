@@ -39,6 +39,7 @@ from .data_client import DataClient
 from .planning.astro import dark_window, moon_illumination, observability
 from .planning.autonomous import evaluate_guardrails, plan_night
 from .planning.catalog import find_target, load_catalog
+from .planning.obstructions import location_status
 from .planning.projects import (
     get_project as _get_project,
     load_projects,
@@ -552,6 +553,62 @@ class SeestarController:
         """Path of the persisted projects/history store under the data dir."""
         return self.settings.data_dir / "projects.json"
 
+    async def _current_gps(self) -> tuple[float, float] | None:
+        """Best-effort scope GPS ``(lat, lon)`` from ``get_device_state``; None if
+        unavailable.
+
+        This is I/O at the tool layer (like the weather read) — the planning cores
+        stay pure/deterministic. Any device fault or an empty/unparseable state
+        resolves to ``None`` (GPS unknown → fail-safe: assume the saved site).
+        """
+        try:
+            dev = await self.alpaca.method_sync("get_device_state")
+            return _parse_gps(dev)
+        except Exception:  # noqa: BLE001 - any device fault → GPS unknown
+            return None
+
+    async def _location_block(self, site: SiteProfile) -> dict:
+        """Reconcile the scope's live GPS against the saved site and DISCLOSE any
+        mismatch, so a stale horizon mask is never silently applied at a new site.
+
+        Returns ``{"matched", "distance_km", "site_name", "mask_applied",
+        "warning"}``:
+
+        * GPS unknown (``_current_gps`` None) → ``matched=None``,
+          ``mask_applied=True`` (assume the saved site) + an "unverified" note.
+        * within ``location_tolerance_km`` → ``matched=True``, ``mask_applied=True``.
+        * beyond tolerance → ``matched=False``, ``mask_applied=False`` + a warning
+          that the mask was NOT applied and a new profile should be set/confirmed.
+        """
+        gps = await self._current_gps()
+        if gps is None:
+            return {
+                "matched": None,
+                "distance_km": None,
+                "site_name": site.name,
+                "mask_applied": True,
+                "warning": f"GPS unverified — assuming saved site '{site.name}'.",
+            }
+        ok, dist = location_status(site, gps[0], gps[1])
+        if ok:
+            return {
+                "matched": True,
+                "distance_km": round(dist, 1),
+                "site_name": site.name,
+                "mask_applied": True,
+                "warning": None,
+            }
+        return {
+            "matched": False,
+            "distance_km": round(dist, 1),
+            "site_name": site.name,
+            "mask_applied": False,
+            "warning": (
+                f"Scope is ~{dist:.0f} km from saved site '{site.name}' — horizon "
+                "mask NOT applied. Set/confirm a profile for this location."
+            ),
+        }
+
     async def get_site_profile(self) -> dict:
         """Return the persisted observing-site profile, if one has been set.
 
@@ -630,10 +687,16 @@ class SeestarController:
             site = load_site(self._site_path())
             if site is None:
                 return {"ok": False, "error": "no site profile set"}
-            window = dark_window(site, when)
+            block = await self._location_block(site)
+            site_for_engine = (
+                site
+                if block["mask_applied"]
+                else dataclasses.replace(site, horizon_mask=[])
+            )
+            window = dark_window(site_for_engine, when)
             illum = moon_illumination(when)
-            assessment = await assess_conditions_weather(site, window, illum)
-            return {"ok": True, **dataclasses.asdict(assessment)}
+            assessment = await assess_conditions_weather(site_for_engine, window, illum)
+            return {"ok": True, "location": block, **dataclasses.asdict(assessment)}
         except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
             return {"ok": False, "error": str(exc)}
 
@@ -706,14 +769,23 @@ class SeestarController:
             site = load_site(self._site_path())
             if site is None:
                 return {"ok": False, "error": "no site profile set"}
+            # GPS reconcile: if the scope has moved off the saved site, disclose it
+            # and run the astronomy against a mask-stripped copy (keep the altitude
+            # floor; drop the stale obstruction arcs) so blocked sky is not dropped.
+            block = await self._location_block(site)
+            site_for_engine = (
+                site
+                if block["mask_applied"]
+                else dataclasses.replace(site, horizon_mask=[])
+            )
             illum = moon_illumination(when)
-            window = dark_window(site, when)
-            conditions = await assess_conditions_weather(site, window, illum)
+            window = dark_window(site_for_engine, when)
+            conditions = await assess_conditions_weather(site_for_engine, window, illum)
             projects = (
                 load_projects(self._projects_path()) if prefer_projects else None
             )
             plans = rank_targets(
-                site,
+                site_for_engine,
                 when,
                 load_catalog(),
                 conditions,
@@ -726,6 +798,7 @@ class SeestarController:
             )
             return {
                 "ok": True,
+                "location": block,
                 "conditions": {
                     "go": conditions.go,
                     "suitability": conditions.suitability,
@@ -788,6 +861,9 @@ class SeestarController:
             return {
                 "ok": True,
                 "conditions": plan.get("conditions"),
+                # Re-surface the GPS/location reconcile computed by plan_targets so
+                # a stale-mask disclosure rides along on the dry-run schedule too.
+                "location": plan.get("location"),
                 "dark_window_utc": dark,
                 "schedule": [dataclasses.asdict(s) for s in sched],
                 "projected_targets": len(sched),
@@ -1041,6 +1117,36 @@ def _extract_focus_pos(focus: Any) -> int | None:
             val = focus.get(key)
             if isinstance(val, (int, float)):
                 return int(val)
+    return None
+
+
+def _parse_gps(dev: Any) -> tuple[float, float] | None:
+    """Extract the scope's ``(lat, lon)`` from a ``get_device_state`` response.
+
+    # FIRMWARE-DEPENDENT: the ``get_device_state`` GPS schema is unconfirmed
+    against hardware — the real key is a best guess isolated to this single helper
+    (update here when the real shape is known). The likely shapes are tried in
+    order: a ``result`` envelope is unwrapped, then ``setting.lat``/``lon``,
+    ``location.lat``/``lon``, or top-level ``lat``/``lon``. Any malformed/empty
+    input or a missing/ non-numeric pair returns ``None`` (GPS unknown → the
+    caller fails safe by assuming the saved site).
+    """
+    if not isinstance(dev, dict) or not dev:
+        return None
+    root = dev.get("result") if isinstance(dev.get("result"), dict) else dev
+    if not isinstance(root, dict):
+        return None
+    for src in (root.get("setting"), root.get("location"), root):
+        if not isinstance(src, dict):
+            continue
+        lat, lon = src.get("lat"), src.get("lon")
+        if (
+            isinstance(lat, (int, float))
+            and not isinstance(lat, bool)
+            and isinstance(lon, (int, float))
+            and not isinstance(lon, bool)
+        ):
+            return (float(lat), float(lon))
     return None
 
 
