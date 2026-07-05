@@ -1,4 +1,4 @@
-"""FastMCP server for seestar-mcp: 23 auditable Seestar S50 control/QA/planning tools.
+"""FastMCP server for seestar-mcp: 28 auditable Seestar S50 control/QA/planning tools.
 
 Two layers, deliberately separated for testability:
 
@@ -38,6 +38,13 @@ from .alpaca_client import AlpacaClient, AlpacaError, AlpacaNotImplemented
 from .data_client import DataClient
 from .planning.astro import dark_window, moon_illumination, observability
 from .planning.catalog import find_target, load_catalog
+from .planning.projects import (
+    get_project as _get_project,
+    load_projects,
+    log_session_result as _log_session_result,
+    recommend_projects as _recommend_projects,
+    upsert_project,
+)
 from .planning.ranker import rank_targets
 from .planning.site import SiteProfile, load_site, save_site
 from .planning.weather import assess_conditions as assess_conditions_weather
@@ -540,6 +547,10 @@ class SeestarController:
         """Path of the persisted site profile under the configured data dir."""
         return self.settings.data_dir / "site_profile.json"
 
+    def _projects_path(self) -> Path:
+        """Path of the persisted projects/history store under the data dir."""
+        return self.settings.data_dir / "projects.json"
+
     async def get_site_profile(self) -> dict:
         """Return the persisted observing-site profile, if one has been set.
 
@@ -662,12 +673,19 @@ class SeestarController:
         types: list[str] | None = None,
         min_alt: float | None = None,
         limit: int = 10,
+        avoid_recent_days: int = 2,
+        prefer_projects: bool = True,
     ) -> dict:
         """Rank tonight's best DSO targets — a scored, reasoned shortlist.
 
         Reads the clock only to resolve "tonight" when ``date`` is omitted.
         Returns a compact per-target summary (id/name/type/score/reasons/window
         + key observability numbers) rather than the full nested record.
+
+        When ``prefer_projects`` (default), the persisted projects/history store
+        is loaded and threaded into the ranker so active projects still short of
+        their goal are boosted and targets imaged within ``avoid_recent_days``
+        are suppressed. Set ``prefer_projects=False`` for pure Phase-1 ranking.
         """
         from datetime import datetime, timezone
 
@@ -679,6 +697,8 @@ class SeestarController:
                     "types": types,
                     "min_alt": min_alt,
                     "limit": limit,
+                    "avoid_recent_days": avoid_recent_days,
+                    "prefer_projects": prefer_projects,
                 },
             )
             when = date or datetime.now(timezone.utc).isoformat()
@@ -688,6 +708,9 @@ class SeestarController:
             illum = moon_illumination(when)
             window = dark_window(site, when)
             conditions = await assess_conditions_weather(site, window, illum)
+            projects = (
+                load_projects(self._projects_path()) if prefer_projects else None
+            )
             plans = rank_targets(
                 site,
                 when,
@@ -696,6 +719,9 @@ class SeestarController:
                 types=types,
                 min_alt=min_alt,
                 limit=limit,
+                projects=projects,
+                now_utc=when,
+                recent_days=avoid_recent_days,
             )
             return {
                 "ok": True,
@@ -725,6 +751,126 @@ class SeestarController:
                     }
                     for p in plans
                 ],
+            }
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    # --- projects ---------------------------------------------------------
+
+    async def list_projects(self) -> dict:
+        """Return every persisted project (goals + accumulated integration).
+
+        Read-only. Degrades to an empty list when no store exists yet.
+        """
+        try:
+            self.provenance.log_call(tool="list_projects", args={})
+            projects = load_projects(self._projects_path())
+            return {
+                "ok": True,
+                "projects": [dataclasses.asdict(p) for p in projects.values()],
+                "count": len(projects),
+            }
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    async def get_project(self, target: str) -> dict:
+        """Return one project's goal, progress and session history by target id.
+
+        Read-only. Returns ``ok:false`` (not an error) when no project exists.
+        """
+        try:
+            self.provenance.log_call(tool="get_project", args={"target": target})
+            proj = _get_project(target, path=self._projects_path())
+            if proj is None:
+                return {"ok": False, "error": f"no project for {target}"}
+            return {"ok": True, "project": dataclasses.asdict(proj)}
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    async def set_project_goal(self, target: str, goal_minutes: float) -> dict:
+        """Create/update a target's integration goal (minutes) for the planner.
+
+        Persists to the local projects store. Resolves a display name from the
+        catalog when possible. Does not touch accumulated integration or history.
+        """
+        try:
+            self.provenance.log_call(
+                tool="set_project_goal",
+                args={"target": target, "goal_minutes": goal_minutes},
+            )
+            now = datetime.now(timezone.utc).isoformat()
+            t = find_target(target)
+            name = t.name if t is not None else target
+            proj = upsert_project(
+                target,
+                name,
+                goal_minutes=goal_minutes,
+                now_utc=now,
+                path=self._projects_path(),
+            )
+            return {"ok": True, "project": dataclasses.asdict(proj)}
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    async def log_session_result(
+        self,
+        target: str,
+        integration_minutes: float,
+        subs_total: int,
+        subs_kept: int,
+        median_fwhm: float | None = None,
+        notes: str = "",
+    ) -> dict:
+        """Record a finished imaging session into a target's project history.
+
+        Appends a session, accumulates kept integration toward the goal, and
+        auto-completes the project when the goal is met. Creates the project if
+        it does not yet exist.
+        """
+        try:
+            self.provenance.log_call(
+                tool="log_session_result",
+                args={
+                    "target": target,
+                    "integration_minutes": integration_minutes,
+                    "subs_total": subs_total,
+                    "subs_kept": subs_kept,
+                    "median_fwhm": median_fwhm,
+                    "notes": notes,
+                },
+            )
+            now = datetime.now(timezone.utc).isoformat()
+            t = find_target(target)
+            name = t.name if t is not None else target
+            proj = _log_session_result(
+                target,
+                name,
+                integration_minutes=integration_minutes,
+                subs_total=subs_total,
+                subs_kept=subs_kept,
+                median_fwhm=median_fwhm,
+                notes=notes,
+                now_utc=now,
+                path=self._projects_path(),
+            )
+            return {"ok": True, "project": dataclasses.asdict(proj)}
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    async def recommend_projects(self, limit: int | None = None) -> dict:
+        """Active projects still needing data, most-needed first.
+
+        Read-only. Answers "what should I image more of?" for the planner.
+        """
+        try:
+            self.provenance.log_call(
+                tool="recommend_projects", args={"limit": limit}
+            )
+            projects = _recommend_projects(path=self._projects_path(), limit=limit)
+            return {
+                "ok": True,
+                "projects": [dataclasses.asdict(p) for p in projects],
+                "count": len(projects),
             }
         except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
             return {"ok": False, "error": str(exc)}
@@ -1043,15 +1189,80 @@ async def plan_targets(
     types: list[str] | None = None,
     min_alt: float | None = None,
     limit: int = 10,
+    avoid_recent_days: int = 2,
+    prefer_projects: bool = True,
 ) -> dict:
     """Rank tonight's best DSO targets for the Seestar given site, sky conditions,
     moon, light pollution, and alt-az field rotation. Returns a scored, reasoned
     shortlist.
 
     Read-only. Optionally filter by ``types`` and ``min_alt`` and cap the count
-    with ``limit``. ``date`` (ISO UTC) overrides "tonight".
+    with ``limit``. ``date`` (ISO UTC) overrides "tonight". When
+    ``prefer_projects`` (default) the projects/history store boosts targets that
+    still need data and suppresses ones imaged within ``avoid_recent_days``.
     """
-    return await get_controller().plan_targets(date, types, min_alt, limit)
+    return await get_controller().plan_targets(
+        date, types, min_alt, limit, avoid_recent_days, prefer_projects
+    )
+
+
+@mcp.tool()
+async def list_projects() -> dict:
+    """List all imaging projects with their goals and accumulated integration.
+
+    Read-only. Empty when no projects have been created yet.
+    """
+    return await get_controller().list_projects()
+
+
+@mcp.tool()
+async def get_project(target: str) -> dict:
+    """Return one project's goal, collected integration, and session history.
+
+    Read-only. ``target`` is a catalog id (e.g. ``"M31"``). Returns ``ok:false``
+    if no project exists for it yet.
+    """
+    return await get_controller().get_project(target)
+
+
+@mcp.tool()
+async def set_project_goal(target: str, goal_minutes: float) -> dict:
+    """Set a target's total integration goal (minutes) for the observing planner.
+
+    SIDE EFFECT: writes to the local projects store. Use ``goal_minutes=0`` for
+    an open-ended project. Does not change already-collected integration.
+    """
+    return await get_controller().set_project_goal(target, goal_minutes)
+
+
+@mcp.tool()
+async def log_session_result(
+    target: str,
+    integration_minutes: float,
+    subs_total: int,
+    subs_kept: int,
+    median_fwhm: float | None = None,
+    notes: str = "",
+) -> dict:
+    """Record a finished imaging session for a target (integration + kept/total
+    subs) into its project history; call at wind-down.
+
+    SIDE EFFECT: appends a session and accumulates integration toward the goal in
+    the local projects store (auto-completing the project when the goal is met).
+    """
+    return await get_controller().log_session_result(
+        target, integration_minutes, subs_total, subs_kept, median_fwhm, notes
+    )
+
+
+@mcp.tool()
+async def recommend_projects(limit: int | None = None) -> dict:
+    """Recommend active projects that still need data, most-needed first.
+
+    Read-only. Answers "what should I image more of tonight?". ``limit`` caps the
+    count.
+    """
+    return await get_controller().recommend_projects(limit)
 
 
 def main() -> None:
