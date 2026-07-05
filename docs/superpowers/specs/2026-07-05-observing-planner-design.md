@@ -51,7 +51,11 @@ class SiteProfile:
     horizon_mask: list[tuple[float, float, float]] = field(default_factory=list)
     # each entry: (az_min_deg, az_max_deg, alt_min_deg) — below alt_min in that
     # azimuth arc is blocked (trees/buildings). Empty = flat open horizon.
-    min_altitude_deg: float = 20.0     # global usable-altitude floor (airmass)
+    min_altitude_deg: float = 20.0     # lower usable-altitude floor (airmass/murk)
+    field_rotation_ceiling_deg: float = 60.0  # upper field-rotation ceiling: above
+    # this, alt-az field rotation degrades subs (worst near the zenith, where
+    # cos(alt)->0). The imaging "sweet spot" is the band
+    # [min_altitude_deg, field_rotation_ceiling_deg].
 
 @dataclass
 class DsoTarget:
@@ -71,8 +75,10 @@ class Observability:
     rise_utc: str | None
     set_utc: str | None
     dark_minutes_above_floor: float    # minutes above min_altitude AND horizon mask AND in astro dark
+    dark_minutes_in_sweet_band: float  # minutes in [min_alt, ceiling] AND mask AND dark — the bankable clean time
     field_rotation_deg_per_hr_at_transit: float
     usable_sub_minutes: float          # minutes before field rotation smears a sub past threshold
+    transits_above_ceiling: bool       # best altitude exceeds the field-rotation ceiling (near-zenith rotation)
     moon_sep_deg: float
     moon_alt_deg: float
     moon_illum_frac: float
@@ -110,24 +116,24 @@ All via `astropy` (`EarthLocation`, `AltAz`, `get_sun`, `get_body("moon")`, `Sky
 
 - **Dark window:** sample the sun's altitude across the night; astronomical dark = sun < −18°. Return `(astro_dusk, astro_dawn)`.
 - **Target track:** altitude/azimuth of the target across the dark window (sampled, e.g. 2-min grid).
-- **Field rotation (alt-az specific):** instantaneous sky rotation rate
-  `rate_deg_per_hr = 15.041 * cos(lat) * cos(az) / cos(alt)` (magnitude), evaluated along the track. `usable_sub_minutes` = time for accumulated rotation at the frame edge to reach a smear threshold (default: star trails < ~1.5 px across the ~1.3° FOV for a 10 s sub → parameterized). This is *the* "will I actually bank clean subs" number for the alt-az Seestar.
-- **Horizon mask + floor:** minutes the target is simultaneously above `min_altitude_deg`, above the site `horizon_mask`, and within the dark window → `dark_minutes_above_floor`.
+- **Field rotation (alt-az specific — the Seestar's key constraint):** instantaneous sky rotation rate
+  `rate_deg_per_hr = 15.041 * cos(lat) * cos(az) / cos(alt)` (magnitude), evaluated along the track. Because `cos(alt)→0` toward the zenith, rotation is **worst at high altitude** — so a target that transits near the zenith rotates fastest exactly when it is best-placed. We therefore treat `field_rotation_ceiling_deg` (default **60°**) as an upper bound: above it, subs degrade. `usable_sub_minutes` = time for accumulated rotation at the frame edge to reach a smear threshold (default: star trails < ~1.5 px across the ~1.3° FOV for a 10 s sub → parameterized). `transits_above_ceiling` flags near-zenith targets. This is *the* "will I actually bank clean subs" set of numbers for the alt-az Seestar.
+- **Horizon mask, floor + ceiling (sweet band):** minutes the target is simultaneously above `min_altitude_deg`, **below `field_rotation_ceiling_deg`**, above the site `horizon_mask`, and within the dark window → `dark_minutes_in_sweet_band` (the bankable clean time). `dark_minutes_above_floor` (no ceiling) is also kept for context.
 - **Moon:** phase/illumination, altitude, and angular separation from the target.
-- **Best window:** the longest contiguous span that is dark + above floor + above mask.
+- **Best window:** the longest contiguous span that is dark + **within the sweet band [floor, ceiling]** + above mask. If a target only clears the horizon by climbing above the ceiling, `transits_above_ceiling` is set and the ranker notes it.
 
 ### Ranking (`ranker.py`)
 
 Score 0–100 = weighted, documented, configurable blend:
-- **Observability** (dark minutes above floor, max altitude) — more good time ranks higher.
-- **Field-rotation usable time** — a target with only a few clean minutes is penalized.
+- **Sweet-band time** (`dark_minutes_in_sweet_band`) — the primary driver: more bankable clean time in the [floor, ceiling] band ranks higher. Raw high altitude is *not* rewarded on its own.
+- **Field-rotation penalty** — targets with few `usable_sub_minutes`, or that `transits_above_ceiling` (near-zenith, heavy rotation), are penalized with an explicit reason (e.g. "transits 78° — heavy field rotation above 60°").
 - **LP fit** (`lightpollution.lp_suitability`): under high Bortle, favor emission/planetary/SNR (narrowband-friendly) targets; on dark nights, allow broadband galaxies/reflection nebulae.
 - **Moon penalty:** scaled by illumination × proximity (small separation to a bright moon hurts).
 - **Framing fit:** compare `size_arcmin` to the Seestar FOV (~1.3°×0.7° ≈ 78'×42'); flag too-large (suggest mosaic) or very small.
 - **Conditions gate:** if `assess_conditions` says no-go, planning still runs but every plan is annotated with the conditions caveat.
 
-Each `TargetPlan.reasons` names the contributing factors, e.g.:
-`"M27 — 82 | transits 68° at 01:10 UTC | 2.1h dark above 20° | field rotation ok (~34 min/sub-safe) | 41° from 12%-lit moon | emission target suits Bortle 6 | fits FOV (8')"`.
+Each `TargetPlan.reasons` names the contributing factors, e.g. (mid-northern site, where M27 transits ~73° — above the ceiling — so its clean window is on the way up/down through the band):
+`"M27 — 79 | best window 22:40–00:20 UTC in the 36–58° band (1.6h clean sweet-band time) | transit 73° flagged: field rotation above 60° | 41° from a 12%-lit moon | emission target suits Bortle 6 | fits FOV (8')"`.
 
 ### Weather (`weather.py`)
 
