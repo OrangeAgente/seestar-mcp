@@ -88,9 +88,9 @@ The firmware-7.18+ RSA key and any tokens live in `./secrets/` (gitignored) or i
 `SEESTAR_SECRET_*` environment variables, loaded on demand by `secrets.py` and never written
 to config, source, or the provenance log.
 
-## Tools (28)
+## Tools (30)
 
-The server exposes exactly 28 single-purpose, least-privilege tools with honest,
+The server exposes exactly 30 single-purpose, least-privilege tools with honest,
 non-obfuscated descriptions. Destructive/motion tools are clearly labelled `SIDE EFFECT` in
 their descriptions; Skills gate them behind explicit user confirmation.
 
@@ -140,6 +140,8 @@ weather). Read-only except `set_site_profile`, which writes the site profile.
 | `assess_conditions` | Weather + moon + astronomical twilight → go/no-go verdict + reasons + dark window. |
 | `get_target_observability` | Deep-dive one target → full observability (sweet-band time, transit, moon, framing) + recommended subs. Read-only. |
 | `plan_targets` | Ranked, reasoned target shortlist with best windows and recommended integration. Read-only. |
+| `simulate_night` | Dry-run tonight's autonomous plan (ordered target schedule) WITHOUT moving the scope. Read-only. |
+| `check_night_guardrails` | Evaluate hard-stop conditions for an autonomous run (dawn, battery, weather, connection, max duration). Read-only. |
 
 ### Projects / history
 
@@ -172,6 +174,19 @@ reactivity**: `run-session` consults the plan, watches conditions during a sessi
 target when one leaves its sweet band, and logs each session's result back into its project
 at wind-down.
 
+## Autonomous night
+
+An **opt-in** unattended mode: hand over the whole night and let Claude run the ranked plan
+target-by-target, react to conditions/QA, and park at dawn. It is **dry-run-first** —
+`simulate_night` projects the ordered schedule with **no motion**, and an **explicit user
+confirmation is required before the first motion command**. It is **guardrailed** —
+`check_night_guardrails` is evaluated every loop iteration and any hard stop (dawn, low
+battery, weather no-go, lost connection, max duration) **always ends in `park`**; if the
+scope's health can't be confirmed, the run stops (fail safe). Autonomy adds no new network
+host or inbound surface — it is the same audited tools driven in a visible loop. The
+**`autonomous-night`** skill drives this flow (planning from `observing-planner`, execution
+from `run-session`, faults from `anomaly-playbook`).
+
 ## Skills
 
 **MCP is the access layer; Skills are the procedure layer.** The MCP server gives Claude the
@@ -187,6 +202,9 @@ ability to reach the telescope, the FITS files, and the QA computations; the Ski
 - **`observing-planner`** — the pre-session planner: a go/no-go conditions verdict and a
   ranked, reasoned target shortlist (best window + recommended integration), then hands the
   chosen target to `run-session`.
+- **`autonomous-night`** — the unattended full-night run-book: propose a no-motion plan
+  (`simulate_night`), get one explicit go-ahead, then loop target-by-target under hard
+  guardrails (`check_night_guardrails`) and park at dawn or on any hard stop.
 
 Skills stay at roughly ~100 tokens of description until they are invoked, so they add almost
 no standing context cost, while the MCP server is deliberately kept lean and single-purpose.
