@@ -80,6 +80,7 @@ CAUSE_FWHM = "fwhm"
 CAUSE_ECC = "eccentricity"
 CAUSE_SNR = "snr"
 CAUSE_STARS = "star_count"
+CAUSE_SCATTER = "scattered_light"
 CAUSE_ERROR = "error"
 
 
@@ -323,6 +324,8 @@ def _score_sub(
     fwhm_sigma: float | None,
     snr_median: float | None,
     starcount_median: float | None,
+    scatter_median: float | None,
+    scatter_sigma: float | None,
 ) -> tuple[SubVerdict, list[str]]:
     """Apply the verdict rules to one sub, building reasons + a verdict.
 
@@ -405,6 +408,39 @@ def _score_sub(
             )
             reject_causes.append(CAUSE_STARS)
 
+    # --- Scattered light / halo: absolute override, else session median + sigma*std.
+    # Subs with scattered_light=None are skipped on this axis (backward compatible:
+    # a session where every sub is None scores exactly as it did pre-feature).
+    if m.scattered_light is not None:
+        if settings.qa_scatter_absolute is not None:
+            if m.scattered_light > settings.qa_scatter_absolute:
+                reasons.append(
+                    f"REJECT: scattered light {m.scattered_light:.3f} > "
+                    f"{settings.qa_scatter_absolute:.3f} (absolute) — likely thin "
+                    "cirrus / bright-star halos"
+                )
+                reject_causes.append(CAUSE_SCATTER)
+        elif scatter_median is not None and scatter_sigma is not None:
+            reject_thr = scatter_median + settings.qa_scatter_reject_sigma * scatter_sigma
+            marginal_thr = (
+                scatter_median + settings.qa_scatter_marginal_sigma * scatter_sigma
+            )
+            if m.scattered_light > reject_thr:
+                reasons.append(
+                    f"REJECT: scattered light {m.scattered_light:.3f} > "
+                    f"{reject_thr:.3f} (median + {settings.qa_scatter_reject_sigma:g}σ)"
+                    " — likely thin cirrus / bright-star halos"
+                )
+                reject_causes.append(CAUSE_SCATTER)
+            elif m.scattered_light > marginal_thr:
+                reasons.append(
+                    f"MARGINAL: scattered light {m.scattered_light:.3f} > "
+                    f"{marginal_thr:.3f} (median + "
+                    f"{settings.qa_scatter_marginal_sigma:g}σ) — possible thin "
+                    "cirrus / bright-star halos"
+                )
+                marginal = True
+
     if reject_causes:
         verdict = "REJECT"
     elif marginal:
@@ -429,6 +465,7 @@ def classify(metrics: list[SubMetrics], settings: Settings) -> SessionReport:
     star_vals = _collect([float(m.star_count) for m in good])
     hfr_vals = _collect([m.hfr for m in good])
     ecc_vals = _collect([m.eccentricity for m in good])
+    scatter_vals = _collect([m.scattered_light for m in good])
 
     fwhm_median = float(np.median(fwhm_vals)) if fwhm_vals.size else None
     # Population std (ddof=0); with a single sub sigma is 0 -> only absolute /
@@ -436,6 +473,9 @@ def classify(metrics: list[SubMetrics], settings: Settings) -> SessionReport:
     fwhm_sigma = float(np.std(fwhm_vals)) if fwhm_vals.size else None
     snr_median = float(np.median(snr_vals)) if snr_vals.size else None
     star_median = float(np.median(star_vals)) if star_vals.size else None
+    # Scattered-light session stats over subs that measured it (None subs skipped).
+    scatter_median = float(np.median(scatter_vals)) if scatter_vals.size else None
+    scatter_sigma = float(np.std(scatter_vals)) if scatter_vals.size else None
 
     medians = {
         "fwhm": fwhm_median,
@@ -444,6 +484,8 @@ def classify(metrics: list[SubMetrics], settings: Settings) -> SessionReport:
         "star_count": star_median,
         "hfr": float(np.median(hfr_vals)) if hfr_vals.size else None,
         "eccentricity": float(np.median(ecc_vals)) if ecc_vals.size else None,
+        "scattered_light": scatter_median,
+        "scattered_light_sigma": scatter_sigma,
         "n_analyzed": len(good),
     }
 
@@ -452,6 +494,7 @@ def classify(metrics: list[SubMetrics], settings: Settings) -> SessionReport:
             m, settings,
             fwhm_median=fwhm_median, fwhm_sigma=fwhm_sigma,
             snr_median=snr_median, starcount_median=star_median,
+            scatter_median=scatter_median, scatter_sigma=scatter_sigma,
         )
         for m in metrics
     ]

@@ -247,6 +247,68 @@ def test_classify_absolute_overrides_take_precedence():
     assert any("fwhm" in r.lower() and "5.0" in r for r in v2.reasons)
 
 
+def test_classify_rejects_high_scatter():
+    """A session of clean subs (low scattered_light) + one much higher outlier:
+    the outlier is REJECT with a reason naming scattered light + threshold + value."""
+    settings = _settings()
+    metrics = [
+        _clean("a", scattered_light=0.01),
+        _clean("b", scattered_light=0.01),
+        _clean("c", scattered_light=0.01),
+        _clean("d", scattered_light=0.01),
+        _clean("hazy", scattered_light=0.9),  # session outlier
+    ]
+    report = classify(metrics, settings)
+    verdicts = {v.name: v for v in report.subs}
+
+    hazy_v = verdicts["hazy"]
+    assert hazy_v.verdict == "REJECT"
+    reason = " ".join(hazy_v.reasons).lower()
+    assert "scattered light" in reason and "0.900" in reason
+    assert "hazy" not in report.keep_list
+
+    # The clean subs stay PASS with no scatter reason.
+    for name in ("a", "b", "c", "d"):
+        assert verdicts[name].verdict == "PASS"
+        assert not any("scattered" in r.lower() for r in verdicts[name].reasons)
+
+
+def test_classify_scatter_none_is_noop():
+    """Every scattered_light is None -> verdicts identical to the pre-feature path:
+    no scatter reasons, and the (otherwise clean) subs all PASS."""
+    settings = _settings()
+    metrics = [
+        _clean("a"),  # scattered_light defaults to None
+        _clean("b"),
+        _clean("c", scattered_light=None),
+    ]
+    report = classify(metrics, settings)
+    verdicts = {v.name: v for v in report.subs}
+
+    for name in ("a", "b", "c"):
+        assert verdicts[name].verdict == "PASS"
+        assert not any("scattered" in r.lower() for r in verdicts[name].reasons)
+    assert set(report.keep_list) == {"a", "b", "c"}
+
+
+def test_scatter_absolute_override():
+    """An absolute scatter limit REJECTs a sub above it regardless of session median."""
+    # All subs sit near 0.2 (so no session-relative reject would fire), but the
+    # absolute limit is 0.1 -> every sub above it REJECTs.
+    settings = _settings(qa_scatter_absolute=0.1)
+    metrics = [
+        _clean("a", scattered_light=0.2),
+        _clean("b", scattered_light=0.2),
+        _clean("c", scattered_light=0.2),
+    ]
+    report = classify(metrics, settings)
+    v = {x.name: x for x in report.subs}["a"]
+    assert v.verdict == "REJECT"
+    assert any(
+        "scattered light" in r.lower() and "absolute" in r.lower() for r in v.reasons
+    )
+
+
 def test_classify_wfwhm_weighted_formula():
     settings = _settings()
     metrics = [

@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     qa_starcount_floor_factor: float = 0.5
     qa_fwhm_absolute: float | None = None  # absolute override; None = session-relative
     qa_eccentricity_absolute: float | None = None
+    # Scattered-light / halo metric (session-relative by default; absolute optional).
+    qa_scatter_reject_sigma: float = 2.0  # REJECT if scatter > median + this*sigma
+    qa_scatter_marginal_sigma: float = 1.0
+    qa_scatter_absolute: float | None = None  # absolute override; None = session-relative
 
     @field_validator("bind_host")
     @classmethod
