@@ -213,8 +213,10 @@ ability to reach the telescope, the FITS files, and the QA computations; the Ski
 
 - **`run-session`** — the end-to-end session run-book (pre-flight, acquire, focus, stack,
   monitor, wind down).
-- **`qa-policy`** — the scoring policy: what the QA metrics mean and how to decide
-  PASS / MARGINAL / REJECT.
+- **`qa-policy`** — the scoring policy: what the QA metrics mean (FWHM, HFR, eccentricity,
+  SNR, background, star count, wFWHM, and `scattered_light` — a bright-star-halo /
+  background-non-uniformity metric that catches thin-cirrus veils slipping the SNR/star-count
+  floors) and how to decide PASS / MARGINAL / REJECT.
 - **`anomaly-playbook`** — the fault decision tree (clouds, dew, focus drift, tracking loss,
   connection drops).
 - **`observing-planner`** — the pre-session planner: a go/no-go conditions verdict and a
