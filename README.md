@@ -219,6 +219,66 @@ host or inbound surface — it is the same audited tools driven in a visible loo
 **`autonomous-night`** skill drives this flow (planning from `observing-planner`, execution
 from `run-session`, faults from `anomaly-playbook`).
 
+## Image refinement (`seestar-refine`)
+
+Refinement runs as a **separate MCP service** in this repo — `seestar-refine` — on the
+processing machine (the Windows / RTX-4090 box, where DeepSkyStacker and, optionally,
+PixInsight are installed). It takes the QA **keep-list** (from `qa_session_report`) and
+turns it into a finished image. It is a distinct concern with external desktop-app
+dependencies, so it is its own FastMCP server, registered separately from `seestar-mcp`.
+
+Two backends, chosen by availability and the user's wish:
+
+- **DeepSkyStacker (DSS)** — the **always-available** path: registers + integrates the
+  keep-list into a master and an auto-stretched PNG preview. Complete on its own.
+- **PixInsight** — the **optional full finish** (only if installed): stack via WBPP,
+  then hand the master to the user's **external
+  [`pixinsight-mcp`](https://github.com/aescaffre/pixinsight-mcp)** server for its
+  quality-gated creative processing. That server is the user's own install
+  (macOS-tested; Windows unverified) — this repo drives it if reachable, it does not
+  vendor it.
+
+### Register line
+
+Like `seestar-mcp`, it speaks MCP over **stdio** — no network port. Register it on the
+processing host **before** starting the Claude Code session:
+
+```bash
+claude mcp add seestar-refine -- uv --directory C:/Users/<user>/SeeStar-AI run python -m seestar_refine.server
+```
+
+### Configuration
+
+All settings are overridable via environment variables with the `SEESTAR_REFINE_`
+prefix. It holds **no secrets** — only non-sensitive desktop-app paths and directories.
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `SEESTAR_REFINE_DSS_CLI` | `""` | Path to `DeepSkyStackerCL(.exe)`. Empty ⇒ DSS not available. |
+| `SEESTAR_REFINE_PIXINSIGHT_EXE` | `""` | Path to `PixInsight(.exe)`. Empty ⇒ the PixInsight/WBPP path is not offered. |
+| `SEESTAR_REFINE_DATA_DIR` | `./data` | Shared dir holding the QA reports + subs to refine. |
+| `SEESTAR_REFINE_OUTPUT_DIR` | `./data/refine` | Where masters, previews, and `refine_provenance.jsonl` are written. |
+| `SEESTAR_REFINE_REJECTION` | `kappa-sigma` | Pixel-rejection algorithm for stacking. |
+| `SEESTAR_REFINE_ALIGNMENT` | `auto` | Star-alignment mode. |
+
+Only configured executables are ever run; a configured-but-missing exe is refused. A
+missing/empty path simply means that backend is unavailable (`check_backends` reports it).
+
+### Tools (5)
+
+| Tool | Description |
+|---|---|
+| `check_backends` | Report which backends are available: DSS CLI, PixInsight, and the external `pixinsight-mcp` bridge. Read-only. |
+| `stack_keep_list` | Stack a target's QA keep-list into a master. `engine`: `dss`/`auto` (default, always) or `wbpp` (PixInsight, if available). SIDE EFFECT: long external process + writes files. |
+| `stretch_master` | Auto-stretch a master into an 8-bit PNG preview; return the path + stats. |
+| `prepare_pixinsight_handoff` | Write the `pixinsight-mcp` JSON config (+ an XISF copy if `xisf` is installed) for the external server's creative finish. Does NOT run PixInsight. |
+| `list_masters` | List masters/previews produced under the output dir. Read-only. |
+
+DSS gives an always-available **master + preview**; PixInsight is an **optional full
+finish** and the creative processing itself is done by the user's external
+`pixinsight-mcp`, not by this service. The **`image-refinement`** skill orchestrates the
+flow (keep-list only, backend + params stated, DSS fallback if PixInsight is unreachable).
+
 ## Skills
 
 **MCP is the access layer; Skills are the procedure layer.** The MCP server gives Claude the
@@ -239,6 +299,9 @@ ability to reach the telescope, the FITS files, and the QA computations; the Ski
 - **`autonomous-night`** — the unattended full-night run-book: propose a no-motion plan
   (`simulate_night`), get one explicit go-ahead, then loop target-by-target under hard
   guardrails (`check_night_guardrails`) and park at dawn or on any hard stop.
+- **`image-refinement`** — the post-session refinement run-book (on `seestar-refine`):
+  stack the QA keep-list into a master + preview with DSS (default), or, for PixInsight
+  owners, WBPP + a hand-off to the external `pixinsight-mcp` for a quality-gated finish.
 
 Skills stay at roughly ~100 tokens of description until they are invoked, so they add almost
 no standing context cost, while the MCP server is deliberately kept lean and single-purpose.

@@ -71,6 +71,19 @@ saved mask is not applied and the mismatch is disclosed in the plan's `location`
 learner's state lives in `data/sky_failures.json` — **local, gitignored, no secrets**, no
 new network host or dependency.
 
+### Image refinement
+
+The refinement service (`seestar-refine`) shells out **only to the configured
+DeepSkyStacker / PixInsight executables** (`SEESTAR_REFINE_DSS_CLI` /
+`SEESTAR_REFINE_PIXINSIGHT_EXE`) — **never an arbitrary executable path from a tool
+argument** — and a configured-but-missing executable is **refused** (reported as an
+unavailable backend, not run). Every external invocation is **provenance-logged** to
+`refine_provenance.jsonl` under the output dir (command + input keep-list + output paths;
+no secrets). Refinement adds **no new network host**: the optional PixInsight finish goes
+through the user's **external `pixinsight-mcp`** server, whose bridge is local/file-based,
+and that server is the **user's own install** (macOS-tested; Windows unverified) — this
+repo drives it if reachable but does not vendor, host, or hold credentials for it.
+
 ## OWASP MCP Top 10 — mitigations
 
 | Risk | Our concrete control |
