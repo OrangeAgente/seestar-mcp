@@ -25,6 +25,7 @@ injectable so tests stay deterministic without astropy.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
 from .astro import Observability, observability
@@ -32,6 +33,7 @@ from .lightpollution import bortle_for, lp_suitability
 
 if TYPE_CHECKING:
     from .catalog import DsoTarget
+    from .projects import Project
     from .site import SiteProfile
     from .weather import ConditionsAssessment
 
@@ -58,6 +60,14 @@ FOV_SMALL_ARCMIN = 5.0
 
 #: Default Seestar sub exposure (seconds). Recorded on every plan.
 RECOMMENDED_EXPOSURE_S = 10
+
+# --- Project-awareness adjustments (0..1 blend units; only when a projects dict
+# --- is supplied — with ``projects=None`` none of this runs, so ranking is
+# --- byte-identical to Phase 1). Bounded constants → clamped back to 0..100. ---
+#: Bonus for an active project still short of its goal ("needs more data").
+PROJECT_BONUS = 0.10
+#: Penalty for a completed project or one imaged within ``recent_days``.
+PROJECT_PENALTY = -0.15
 
 
 @dataclass
@@ -98,8 +108,14 @@ def _score_target(
     site: SiteProfile,
     target: DsoTarget,
     obs: Observability,
+    blend_delta: float = 0.0,
 ) -> tuple[int, float, float, float, float]:
-    """Return ``(score, time_term, lp_fit, moon_term, field_rot_term)``."""
+    """Return ``(score, time_term, lp_fit, moon_term, field_rot_term)``.
+
+    ``blend_delta`` is an optional bounded project adjustment (in 0..1 blend
+    units) added before the final clamp/scale. With the default ``0.0`` the math
+    is byte-identical to Phase 1.
+    """
     time_term = min(1.0, obs.dark_minutes_in_sweet_band / SWEET_BAND_FULL_MINUTES)
     lp_fit = lp_suitability(target.type, bortle_for(site))
     moon_term = min(1.0, obs.moon_sep_deg / 90.0) * (1.0 - 0.5 * obs.moon_illum_frac)
@@ -113,7 +129,7 @@ def _score_target(
         + W_FRAMING * framing
         + W_FIELD_ROT * field_rot
     )
-    score = int(max(0, min(100, round(blend * 100))))
+    score = int(max(0, min(100, round((blend + blend_delta) * 100))))
     return score, time_term, lp_fit, moon_term, field_rot
 
 
@@ -160,19 +176,102 @@ def _reasons(
     return reasons
 
 
+def _parse_iso(value: str) -> datetime:
+    """Parse an ISO timestamp, tolerating a trailing ``Z`` (→ ``+00:00``)."""
+    when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when
+
+
+def _days_since_last_session(proj: Project, now_utc: str | None) -> int | None:
+    """Whole-day delta from ``now_utc`` to the project's most-recent session.
+
+    Returns ``None`` when ``now_utc`` is missing or no session date parses. Uses
+    the passed-in project's ``sessions`` inline (no disk read).
+    """
+    if now_utc is None:
+        return None
+    now = _parse_iso(now_utc)
+    latest: datetime | None = None
+    for session in proj.sessions:
+        try:
+            when = _parse_iso(session.date_utc)
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if latest is None or when > latest:
+            latest = when
+    if latest is None:
+        return None
+    return (now - latest).days
+
+
+def _project_adjustment(
+    target: DsoTarget,
+    projects: dict[str, Project],
+    now_utc: str | None,
+    recent_days: int,
+) -> tuple[float, list[str]]:
+    """Return ``(blend_delta, extra_reasons)`` for a target given its project.
+
+    A target is either **boosted** (active project still short of its goal),
+    **suppressed** (imaged within ``recent_days``, or a completed goal), or
+    neutral. Never raises: a malformed project entry yields no adjustment.
+    """
+    try:
+        proj = projects.get(target.id)
+        if proj is None:
+            return 0.0, []
+
+        goal = proj.goal_minutes
+        collected = proj.collected_minutes
+        active_needing = proj.status == "active" and (
+            goal == 0 or collected < goal
+        )
+        if active_needing:
+            if goal == 0:
+                reason = (
+                    f"active project — {collected:.0f} min collected, open-ended"
+                )
+            else:
+                reason = (
+                    f"active project — {collected:.0f} of {goal:.0f} min,"
+                    " needs more"
+                )
+            return PROJECT_BONUS, [reason]
+
+        # Not active-needing: suppress if recently imaged, else if goal is met.
+        days = _days_since_last_session(proj, now_utc)
+        if days is not None and 0 <= days <= recent_days:
+            return PROJECT_PENALTY, [f"imaged {days}d ago"]
+
+        completed = proj.status == "complete" or (goal > 0 and collected >= goal)
+        if completed:
+            return PROJECT_PENALTY, ["goal met"]
+
+        return 0.0, []
+    except Exception:  # noqa: BLE001 - a bad project entry must not crash ranking
+        return 0.0, []
+
+
 def _plan_target(
     site: SiteProfile,
     target: DsoTarget,
     obs: Observability,
+    *,
+    blend_delta: float = 0.0,
+    extra_reasons: list[str] | None = None,
 ) -> TargetPlan:
     """Build a fully-reasoned :class:`TargetPlan` for one scored target."""
-    score, _time, lp_fit, _moon, _frot = _score_target(site, target, obs)
+    score, _time, lp_fit, _moon, _frot = _score_target(site, target, obs, blend_delta)
 
     recommended_subs = int(
         obs.dark_minutes_in_sweet_band * 60.0 / RECOMMENDED_EXPOSURE_S
     )
     framing_note = _framing_note(target.size_arcmin)
     reasons = _reasons(site, target, obs, lp_fit, framing_note, recommended_subs)
+    if extra_reasons:
+        reasons.extend(extra_reasons)
 
     return TargetPlan(
         target=target,
@@ -196,6 +295,9 @@ def rank_targets(
     min_alt: float | None = None,
     limit: int | None = None,
     observability_fn: Callable[..., Observability] = observability,
+    projects: dict[str, Project] | None = None,
+    now_utc: str | None = None,
+    recent_days: int = 2,
 ) -> list[TargetPlan]:
     """Rank ``catalog`` for ``site`` on ``when_utc``, best score first.
 
@@ -207,6 +309,14 @@ def rank_targets(
     ``conditions`` is accepted for the conditions caveat / API symmetry; the
     go/no-go verdict does not exclude targets (planning still runs on a no-go
     night — the caller annotates the caveat). Never raises.
+
+    **Project-awareness (optional, backward-compatible):** when ``projects`` (a
+    ``{target_id: Project}`` map, already loaded — this function never reads
+    disk) is supplied, an active project still short of its goal gets a bounded
+    score boost, while a completed project or one imaged within ``recent_days``
+    (measured against ``now_utc``) is suppressed, each with an explaining reason.
+    With ``projects=None`` (the default) none of this runs and the result is
+    byte-identical to Phase 1.
     """
     try:
         selected = catalog
@@ -222,7 +332,21 @@ def rank_targets(
                 continue
             if obs.dark_minutes_in_sweet_band <= 0:
                 continue  # never up / no clean sweet-band time — excluded
-            plans.append(_plan_target(site, target, obs))
+            blend_delta = 0.0
+            extra_reasons: list[str] | None = None
+            if projects is not None:
+                blend_delta, extra_reasons = _project_adjustment(
+                    target, projects, now_utc, recent_days
+                )
+            plans.append(
+                _plan_target(
+                    site,
+                    target,
+                    obs,
+                    blend_delta=blend_delta,
+                    extra_reasons=extra_reasons,
+                )
+            )
 
         plans.sort(key=lambda p: p.score, reverse=True)
         if limit is not None and limit >= 0:
