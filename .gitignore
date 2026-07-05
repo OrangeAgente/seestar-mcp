@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# uv
+# NOTE: uv.lock IS committed (reproducible builds) — do not ignore it.
+
+# Local data / secrets (never commit)
+data/
+*.fit
+*.fits
+!tests/fixtures/*.fits
+.env
+secrets/
+*.pem
+*.key
+
+# SBOM output
+sbom*.json
+sbom*.xml
+
+# OS
+.DS_Store
+Thumbs.db
