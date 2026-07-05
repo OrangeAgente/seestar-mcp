@@ -83,6 +83,24 @@ class AlpacaActionNotImplemented(AlpacaError):
     """Raised when ``ErrorNumber == 1036`` (ActionNotImplemented)."""
 
 
+class AlpacaTransportError(AlpacaError):
+    """Raised when the seestar_alp bridge is unreachable.
+
+    Wraps an ``httpx.RequestError`` (connection refused, DNS failure, read
+    timeout, etc.) so callers get a clean :class:`AlpacaError` — which the
+    controller already maps to ``{"ok": False}`` — instead of an unhandled
+    transport exception. Carries a sentinel ``error_number`` of ``-1``.
+    """
+
+    def __init__(
+        self,
+        error_number: int = -1,
+        error_message: str = "",
+        verb: str | None = None,
+    ) -> None:
+        super().__init__(error_number, error_message, verb)
+
+
 def _alpaca_bool(value: bool) -> str:
     """Serialize a bool the way ASCOM form bodies expect: ``True``/``False``."""
     return "True" if value else "False"
@@ -153,6 +171,38 @@ class AlpacaClient:
         self._txn_id += 1
         return self._txn_id
 
+    def _raise_for_http_status(
+        self,
+        response: httpx.Response,
+        verb: str | None,
+        *,
+        tool: str,
+        args: dict,
+        request: str | None = None,
+        client_txn_id: int | None = None,
+    ) -> None:
+        """Log provenance and raise :class:`AlpacaError` for a 4xx/5xx response.
+
+        seestar_alp returns an error body like
+        ``{"title": "...", "description": "..."}`` on failures; surface that
+        (falling back to the raw text) as the error message.
+        """
+        try:
+            data = response.json()
+        except Exception:
+            data = {}
+        self._log(
+            tool=tool,
+            args=args,
+            request=request,
+            client_txn_id=client_txn_id,
+            response_code=response.status_code,
+        )
+        message = str(
+            data.get("description") or data.get("title") or response.text
+        )[:200]
+        raise AlpacaError(response.status_code, message, verb)
+
     def _parse_envelope(self, data: dict, verb: str | None) -> tuple[Any, int, int]:
         """Return ``(value, error_number, server_txn_id)``, raising on errors."""
         error_number = int(data.get("ErrorNumber", 0))
@@ -176,7 +226,24 @@ class AlpacaClient:
             "ClientID": self.client_id,
             "ClientTransactionID": client_txn_id,
         }
-        response = await self._client.get(f"{self._base_path}/{verb}", params=params)
+        try:
+            response = await self._client.get(
+                f"{self._base_path}/{verb}", params=params
+            )
+        except httpx.RequestError as e:
+            self._log(
+                tool=f"alpaca.get.{verb}",
+                args={"verb": verb},
+                client_txn_id=client_txn_id,
+                response_code=None,
+                note=f"transport error: {type(e).__name__}",
+            )
+            raise AlpacaTransportError(-1, str(e), verb) from e
+        if response.status_code >= 400:
+            self._raise_for_http_status(
+                response, verb, tool=f"alpaca.get.{verb}", args={"verb": verb},
+                client_txn_id=client_txn_id,
+            )
         data = response.json()
         server_txn_id = data.get("ServerTransactionID")
         error_number = int(data.get("ErrorNumber", 0))
@@ -195,7 +262,24 @@ class AlpacaClient:
         verb = verb.lower()
         client_txn_id = self._next_txn_id()
         body = self._form_body(fields, client_txn_id)
-        response = await self._client.put(f"{self._base_path}/{verb}", data=body)
+        try:
+            response = await self._client.put(f"{self._base_path}/{verb}", data=body)
+        except httpx.RequestError as e:
+            self._log(
+                tool=f"alpaca.put.{verb}",
+                args={"verb": verb},
+                request=_urlencode(body),
+                client_txn_id=client_txn_id,
+                response_code=None,
+                note=f"transport error: {type(e).__name__}",
+            )
+            raise AlpacaTransportError(-1, str(e), verb) from e
+        if response.status_code >= 400:
+            self._raise_for_http_status(
+                response, verb, tool=f"alpaca.put.{verb}",
+                args={"verb": verb}, request=_urlencode(body),
+                client_txn_id=client_txn_id,
+            )
         data = response.json()
         server_txn_id = data.get("ServerTransactionID")
         error_number = int(data.get("ErrorNumber", 0))
@@ -234,7 +318,24 @@ class AlpacaClient:
 
         fields = {"Action": action, "Parameters": parameters_str}
         body = self._form_body(fields, client_txn_id)
-        response = await self._client.put(f"{self._base_path}/action", data=body)
+        try:
+            response = await self._client.put(f"{self._base_path}/action", data=body)
+        except httpx.RequestError as e:
+            self._log(
+                tool="alpaca.put.action",
+                args={"action": action, "is_async": is_async},
+                request=_urlencode(body),
+                client_txn_id=client_txn_id,
+                response_code=None,
+                note=f"transport error: {type(e).__name__}",
+            )
+            raise AlpacaTransportError(-1, str(e), "action") from e
+        if response.status_code >= 400:
+            self._raise_for_http_status(
+                response, "action", tool="alpaca.put.action",
+                args={"action": action, "is_async": is_async},
+                request=_urlencode(body), client_txn_id=client_txn_id,
+            )
         data = response.json()
         server_txn_id = data.get("ServerTransactionID")
         error_number = int(data.get("ErrorNumber", 0))

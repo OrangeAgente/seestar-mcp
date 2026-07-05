@@ -19,6 +19,7 @@ from seestar_mcp.alpaca_client import (
     AlpacaClient,
     AlpacaError,
     AlpacaNotImplemented,
+    AlpacaTransportError,
 )
 from seestar_mcp.provenance import ProvenanceLog
 
@@ -213,6 +214,58 @@ async def test_get_connected_and_boolean_wrappers():
     body = parse_qs(route_put.calls.last.request.content.decode())
     # ASCOM convention: capitalized True/False strings.
     assert body["Connected"] == ["True"]
+    await ac.aclose()
+
+
+@respx.mock
+async def test_bridge_down_raises_transport_error(tmp_path):
+    # seestar_alp bridge unreachable: httpx raises a transport error, which we
+    # must surface as AlpacaTransportError and still record in provenance.
+    respx.get(f"{BASE_URL}{API}/connected").mock(
+        side_effect=httpx.ConnectError("Connection refused")
+    )
+    prov_path = tmp_path / "prov.jsonl"
+    prov = ProvenanceLog(prov_path)
+    ac, _ = _make_client(provenance=prov)
+    with pytest.raises(AlpacaTransportError) as exc_info:
+        await ac.get_property("connected")
+    assert exc_info.value.error_number == -1
+    await ac.aclose()
+
+    lines = prov_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert "transport error" in record["note"]
+    assert record.get("response_code") is None
+
+
+@respx.mock
+async def test_bridge_down_on_action_raises_transport_error():
+    respx.put(f"{BASE_URL}{API}/action").mock(
+        side_effect=httpx.ConnectError("Connection refused")
+    )
+    ac, _ = _make_client()
+    with pytest.raises(AlpacaTransportError):
+        await ac.method_sync("get_view_state")
+    await ac.aclose()
+
+
+@respx.mock
+async def test_500_response_raises_alpaca_error():
+    # seestar_alp returns {"title":..., "description":...} with a 5xx status.
+    respx.put(f"{BASE_URL}{API}/action").mock(
+        return_value=httpx.Response(
+            500, json={"title": "Internal Server Error", "description": "boom"}
+        )
+    )
+    ac, _ = _make_client()
+    with pytest.raises(AlpacaError) as exc_info:
+        await ac.method_sync("get_view_state")
+    err = exc_info.value
+    assert err.error_number == 500
+    assert "boom" in str(err)
+    # Not a transport error (the bridge answered, just with a 5xx).
+    assert not isinstance(err, AlpacaTransportError)
     await ac.aclose()
 
 

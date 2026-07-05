@@ -13,7 +13,7 @@ from seestar_mcp.config import Settings, get_settings
 def test_defaults_match_spec():
     s = Settings()
     assert s.alpaca_base_url == "http://127.0.0.1:5555"
-    assert s.alpaca_device_num == 0
+    assert s.alpaca_device_num == 1
     assert s.seestar_host == "127.0.0.1"
     assert s.jsonrpc_port == 4700
     assert s.http_port == 80

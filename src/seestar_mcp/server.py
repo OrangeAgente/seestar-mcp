@@ -164,6 +164,8 @@ class SeestarController:
         """Read the device's live ``get_view_state`` telemetry (native method)."""
         try:
             state = await self.alpaca.method_sync("get_view_state")
+            if (err := _native_error(state)) is not None:
+                return {"ok": False, "error": err, "raw": state}
             return {"ok": True, "view_state": state}
         except AlpacaError as exc:
             return _err(exc)
@@ -263,6 +265,8 @@ class SeestarController:
             focus = await self.alpaca.method_sync(
                 "get_focuser_position", {"ret_obj": True}
             )
+            if (err := _native_error(focus)) is not None:
+                return {"ok": False, "error": err, "raw": focus}
             return {"ok": True, "focuser": focus, "focus_pos": _extract_focus_pos(focus)}
         except AlpacaError as exc:
             return _err(exc)
@@ -273,6 +277,8 @@ class SeestarController:
             # FIRMWARE-DEPENDENT: solve method names.
             await self.alpaca.method_sync("start_solve")
             result = await self.alpaca.method_sync("get_solve_result")
+            if (err := _native_error(result)) is not None:
+                return {"ok": False, "error": err, "raw": result}
             return {"ok": True, "solve_result": result}
         except AlpacaError as exc:
             return _err(exc)
@@ -514,6 +520,25 @@ def _err(exc: AlpacaError) -> dict:
         "error": str(exc),
         "error_number": getattr(exc, "error_number", None),
     }
+
+
+def _native_error(value: Any) -> str | None:
+    """Return an error string if a native action result signals failure, else None.
+
+    seestar_alp tunnels native JSON-RPC results verbatim inside an otherwise-ok
+    Alpaca envelope. When the device is idle/slow it can return a result *string*
+    like ``"Error: Exceeded allotted wait time for result"`` even though the
+    Alpaca ``ErrorNumber`` is 0. Detect that so the controller surfaces it as
+    ``ok:false`` instead of a false ``ok:true``. Handles both a bare string and a
+    dict whose ``"result"`` is such a string.
+    """
+    if isinstance(value, str) and value.strip().lower().startswith("error"):
+        return value
+    if isinstance(value, dict):
+        result = value.get("result")
+        if isinstance(result, str) and result.strip().lower().startswith("error"):
+            return result
+    return None
 
 
 def _extract_focus_pos(focus: Any) -> int | None:
