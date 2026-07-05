@@ -228,9 +228,15 @@ def test_stack_keep_list_dss_success_auto_preview(tmp_path, monkeypatch):
     assert Path(result["preview_path"]).exists()
 
 
-def test_stack_keep_list_wbpp_not_available_until_task4(tmp_path):
+def test_stack_keep_list_wbpp_pixinsight_not_configured(tmp_path):
+    # engine="wbpp" now routes to wbpp.run_wbpp; with PixInsight unconfigured it
+    # returns a structured not-configured error (never launches anything).
     settings = RefineSettings(
-        _env_file=None, data_dir=tmp_path, output_dir=tmp_path, dss_cli="x"
+        _env_file=None,
+        data_dir=tmp_path,
+        output_dir=tmp_path,
+        dss_cli="x",
+        pixinsight_exe="",
     )
     target = "M27"
     sub_dir = tmp_path / target
@@ -240,4 +246,58 @@ def test_stack_keep_list_wbpp_not_available_until_task4(tmp_path):
     controller = RefineController.from_settings(settings)
     result = asyncio.run(controller.stack_keep_list(target, engine="wbpp"))
     assert result["ok"] is False
-    assert "wbpp" in (result["error"] or "").lower()
+    assert result["engine"] == "wbpp"
+    assert "pixinsight" in (result["error"] or "").lower()
+
+
+def test_prepare_pixinsight_handoff_tool_registered():
+    names = {t.name for t in asyncio.run(mcp.list_tools())}
+    assert "prepare_pixinsight_handoff" in names
+
+
+def test_list_masters_tool_registered():
+    names = {t.name for t in asyncio.run(mcp.list_tools())}
+    assert "list_masters" in names
+
+
+def test_prepare_pixinsight_handoff_writes_config(tmp_path):
+    master = tmp_path / "M27_master.fit"
+    master.write_bytes(b"x")
+    settings = RefineSettings(
+        _env_file=None, data_dir=tmp_path, output_dir=tmp_path
+    )
+    controller = RefineController.from_settings(settings)
+    result = asyncio.run(
+        controller.prepare_pixinsight_handoff(str(master), "M27")
+    )
+    assert result["ok"] is True
+    assert result["config"]["target"] == "M27"
+    assert result["config"]["channels"]["RGB"] == str(master)
+    from pathlib import Path
+
+    assert Path(result["config_path"]).exists()
+    # xisf isn't installed → documented FITS fallback, but handoff still ok.
+    assert result["xisf"]["ok"] is False
+    assert result["xisf"]["fallback"] == "fits"
+    # The invocation was provenance-logged.
+    log = (tmp_path / "refine_provenance.jsonl").read_text(encoding="utf-8")
+    assert "prepare_pixinsight_handoff" in log
+
+
+def test_list_masters_returns_files(tmp_path):
+    settings = RefineSettings(
+        _env_file=None, data_dir=tmp_path, output_dir=tmp_path
+    )
+    (tmp_path / "M27_master.fit").write_bytes(b"x")
+    (tmp_path / "M27_master.png").write_bytes(b"x")
+    (tmp_path / "notes.txt").write_bytes(b"x")  # ignored (not a master pattern)
+
+    controller = RefineController.from_settings(settings)
+    result = asyncio.run(controller.list_masters())
+    assert result["ok"] is True
+    names = {m["name"] for m in result["masters"]}
+    assert "M27_master.fit" in names
+    assert "M27_master.png" in names
+    assert "notes.txt" not in names
+    for m in result["masters"]:
+        assert "size" in m and "mtime" in m
