@@ -23,9 +23,10 @@ from mcp.server.fastmcp import FastMCP
 
 from seestar_mcp.provenance import ProvenanceLog
 
-from . import dss
+from . import dss, wbpp
 from .backends import detect_backends
 from .config import RefineSettings, get_settings
+from .handoff import to_xisf, write_pixinsight_config
 from .keeplist import KeepList, load_keep_list
 from .preview import make_preview
 
@@ -118,9 +119,10 @@ class RefineController:
         """Stack a target's QA keep-list into a master via the chosen engine.
 
         ``engine``: ``"dss"``/``"auto"`` route to DeepSkyStacker (the default,
-        always-available path); ``"wbpp"`` is not wired until Task 4. Resolves the
-        keep-list (newest QA report, else a per-target glob), runs the stack, and
-        provenance-logs the external invocation. Never raises.
+        always-available path); ``"wbpp"`` routes to the PixInsight WBPP runner
+        (best-effort, requires PixInsight — the skill decides when to use it).
+        Resolves the keep-list (newest QA report, else a per-target glob), runs
+        the stack, and provenance-logs the external invocation. Never raises.
         """
         try:
             keep_list = self._resolve_keep_list(target)
@@ -138,14 +140,31 @@ class RefineController:
             eff_target = keep_list.target or target
 
             if engine == "wbpp":
+                # PixInsight WBPP path (no auto-preview — the creative finish is
+                # done later by the external pixinsight-mcp).
+                result = wbpp.run_wbpp(keep_list, self.settings)
+                self.provenance.log_call(
+                    tool="stack_keep_list",
+                    args={
+                        "target": eff_target,
+                        "engine": result.engine,
+                        "n_subs": result.n_subs,
+                        "master_path": result.master_path,
+                        "preview_path": None,
+                    },
+                )
                 return {
-                    "ok": False,
-                    "engine": "wbpp",
-                    "target": eff_target,
-                    "error": "wbpp not available until Task 4",
+                    "ok": result.ok,
+                    "engine": result.engine,
+                    "target": result.target,
+                    "n_subs": result.n_subs,
+                    "master_path": result.master_path,
+                    "preview_path": result.preview_path,
+                    "stats": result.stats,
+                    "error": result.error,
                 }
 
-            # "dss" or "auto" -> DeepSkyStacker (WBPP added in Task 4).
+            # "dss" or "auto" -> DeepSkyStacker (WBPP is opt-in via engine).
             result = dss.stack(keep_list, self.settings)
 
             # Best-effort auto-preview: on a successful stack with a master,
@@ -214,6 +233,77 @@ class RefineController:
         except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
             return {"ok": False, "error": str(exc)}
 
+    # --- PixInsight handoff ----------------------------------------------
+
+    async def prepare_pixinsight_handoff(
+        self, master_path: str, target: str
+    ) -> dict:
+        """Prepare a master for the EXTERNAL ``pixinsight-mcp`` creative finish.
+
+        Writes the ``pixinsight-mcp`` JSON config (target + absolute channel
+        paths + output dir) via :func:`write_pixinsight_config` and best-effort
+        converts the master to XISF via :func:`to_xisf` (degrades to a FITS
+        fallback when the optional ``xisf`` package is absent). Does NOT run
+        PixInsight — the creative processing is the external server's job.
+        Provenance-logs the invocation. Never raises.
+        """
+        try:
+            out_dir = Path(self.settings.output_dir)
+            cfg = write_pixinsight_config(master_path, target, out_dir)
+            xisf_out = out_dir / f"{Path(master_path).stem}.xisf"
+            xisf_result = to_xisf(master_path, xisf_out)
+            self.provenance.log_call(
+                tool="prepare_pixinsight_handoff",
+                args={
+                    "master_path": str(master_path),
+                    "target": target,
+                    "config_path": cfg.get("config_path"),
+                    "xisf_ok": xisf_result.get("ok"),
+                },
+            )
+            return {
+                "ok": cfg.get("ok", False),
+                "config_path": cfg.get("config_path"),
+                "config": cfg.get("config"),
+                "xisf": xisf_result,
+                "error": cfg.get("error"),
+            }
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    async def list_masters(self) -> dict:
+        """List masters/previews produced under the configured output dir.
+
+        Read-only. Matches master/preview patterns (``*.fit*``, ``*.tif*``,
+        ``*.xisf``, ``*.png``) with size + mtime, newest first. Never raises.
+        """
+        try:
+            out_dir = Path(self.settings.output_dir)
+            masters: list[dict] = []
+            if out_dir.is_dir():
+                seen: set[Path] = set()
+                for pattern in ("*.fit*", "*.tif*", "*.xisf", "*.png"):
+                    for path in out_dir.glob(pattern):
+                        if not path.is_file() or path in seen:
+                            continue
+                        seen.add(path)
+                        st = path.stat()
+                        masters.append(
+                            {
+                                "path": str(path),
+                                "name": path.name,
+                                "size": st.st_size,
+                                "mtime": st.st_mtime,
+                            }
+                        )
+                masters.sort(key=lambda m: m["mtime"], reverse=True)
+            self.provenance.log_call(
+                tool="list_masters", args={"count": len(masters)}
+            )
+            return {"ok": True, "masters": masters}
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
 
 # ===========================================================================
 # Thin MCP registration. Transport is stdio (mcp.run() default): NO inbound
@@ -277,6 +367,34 @@ async def stretch_master(master_path: str, params: dict | None = None) -> dict:
     unreadable master). The invocation is provenance-logged.
     """
     return await get_controller().stretch_master(master_path, params)
+
+
+@mcp.tool()
+async def prepare_pixinsight_handoff(master_path: str, target: str) -> dict:
+    """Prepare a stacked master for the EXTERNAL pixinsight-mcp creative finish.
+
+    SIDE EFFECT: WRITES a ``<target>_pixinsight.json`` config (and, if the
+    optional ``xisf`` package is installed, an ``.xisf`` copy of the master)
+    under the configured output dir. This tool does NOT run PixInsight — the
+    creative processing (gradient/deconvolution/denoise/stretch) is performed by
+    the user's separate, EXTERNAL ``pixinsight-mcp`` server, which the skill
+    drives with the returned config. When ``xisf`` is absent, the handoff
+    degrades to the FITS master (documented fallback). Provenance-logged.
+    """
+    return await get_controller().prepare_pixinsight_handoff(
+        master_path, target
+    )
+
+
+@mcp.tool()
+async def list_masters() -> dict:
+    """List masters/previews produced under the configured output dir.
+
+    Read-only. Returns each file's path, name, size, and mtime (newest first),
+    matching master/preview patterns (FITS/TIFF/XISF/PNG) so the skill can show
+    what has been produced.
+    """
+    return await get_controller().list_masters()
 
 
 def main() -> None:
