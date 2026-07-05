@@ -12,6 +12,9 @@ venv/
 
 # Local data / secrets (never commit)
 data/
+# ...but the bundled DSO catalog (package data) IS committed.
+!src/seestar_mcp/planning/data/
+!src/seestar_mcp/planning/data/dso_catalog.json
 *.fit
 *.fits
 !tests/fixtures/*.fits
