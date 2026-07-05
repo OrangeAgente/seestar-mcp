@@ -132,6 +132,114 @@ async def test_goto_target_maps_alpaca_error_to_ok_false(tmp_path):
     assert result["error_number"] == 1025
 
 
+async def test_goto_target_native_error_maps_to_ok_false(tmp_path):
+    # Live-test regression: the scope tunnels a native "Error: ..." result inside
+    # an otherwise-ok Alpaca envelope. goto_target MUST NOT report ok:true (which
+    # would let a run-session flow proceed to solve/stack on a phantom goto).
+    from seestar_mcp.config import Settings
+
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = {
+        "method": "iscope_start_view",
+        "params": {"mode": "star"},
+        "result": "Error: Exceeded allotted wait time for result",
+    }
+    ctrl = SeestarController(
+        settings=Settings(manifest_dir=tmp_path / "m"),
+        provenance=AsyncMock(),
+        alpaca=alpaca,
+        data=AsyncMock(),
+        tier1=AsyncMock(),
+    )
+    result = await ctrl.goto_target("M31", 10.68, 41.27, session_id="err-native")
+    assert result["ok"] is False
+    assert "Error" in result["error"]
+    assert result["raw"]["result"].startswith("Error")
+    # It must NOT signal a started/successful session.
+    assert result.get("ok") is not True
+
+
+async def test_goto_target_native_success_stays_ok_true(tmp_path):
+    # A legit non-error native result must still read as ok:true (no over-trigger).
+    from seestar_mcp.config import Settings
+
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = {"status": "ok", "method": "iscope_start_view"}
+    ctrl = SeestarController(
+        settings=Settings(manifest_dir=tmp_path / "m"),
+        provenance=AsyncMock(),
+        alpaca=alpaca,
+        data=AsyncMock(),
+        tier1=AsyncMock(),
+    )
+    result = await ctrl.goto_target("M31", 10.68, 41.27, session_id="ok-native")
+    assert result["ok"] is True
+    assert result["session_id"] == "ok-native"
+
+
+async def test_start_stack_native_error_maps_to_ok_false():
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = "Error: cannot start stack"
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    result = await ctrl.start_stack()
+    assert result["ok"] is False
+    assert "Error" in result["error"]
+
+
+async def test_run_autofocus_native_error_maps_to_ok_false():
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = {"result": "Error: autofocus failed"}
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    result = await ctrl.run_autofocus()
+    assert result["ok"] is False
+    assert "Error" in result["error"]
+
+
+async def test_park_native_error_maps_to_ok_false():
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = "Error: park refused"
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    result = await ctrl.park()
+    assert result["ok"] is False
+    assert "Error" in result["error"]
+
+
+async def test_stop_view_native_error_maps_to_ok_false():
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = {"result": "Error: stop failed"}
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    result = await ctrl.stop_view("Stack")
+    assert result["ok"] is False
+    assert "Error" in result["error"]
+
+
+async def test_set_filter_native_error_maps_to_ok_false():
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = "Error: wheel jammed"
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    result = await ctrl.set_filter(1)
+    assert result["ok"] is False
+    assert "Error" in result["error"]
+
+
+async def test_set_dew_heater_native_error_maps_to_ok_false():
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = {"result": "Error: heater fault"}
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    result = await ctrl.set_dew_heater(True)
+    assert result["ok"] is False
+    assert "Error" in result["error"]
+
+
+async def test_shutdown_native_error_maps_to_ok_false():
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = "Error: shutdown refused"
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    result = await ctrl.shutdown()
+    assert result["ok"] is False
+    assert "Error" in result["error"]
+
+
 async def test_get_status_never_raises_on_error():
     alpaca = AsyncMock()
     alpaca.get_connected.side_effect = AlpacaError(1099, "boom", "connected")
