@@ -40,6 +40,8 @@ import numpy as np
 from astropy.convolution import convolve
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
+from photutils.aperture import ApertureStats, CircularAnnulus
+from photutils.background import Background2D
 from photutils.segmentation import (
     SourceCatalog,
     detect_sources,
@@ -59,6 +61,19 @@ KERNEL_FWHM = 3.0          # FWHM (px) of the smoothing kernel used before detec
 KERNEL_SIZE = 5            # kernel support (px); odd, >= a few * KERNEL_FWHM/2
 SIGMA_CLIP = 3.0           # sigma for the sigma-clipped background statistics
 HFR_FLUX_FRACTION = 0.5    # flux fraction for the half-flux radius (HFR) measure
+
+# --- scattered-light / halo metric parameters -----------------------------
+# The scattered_light figure blends two veil signatures (see analyze_sub):
+#   halo ratio       = median over the K brightest stars of the local pedestal
+#                      just outside the core (annulus) relative to the star peak.
+#   non-uniformity   = spread of a coarse Background2D mesh / its median.
+# scattered_light = max(halo_ratio, non_uniformity); None if < K bright stars or
+# not computable. Both are near 0 for a flat dark sky, elevated under cirrus.
+SCATTER_K = 10             # number of brightest stars used for the halo ratio
+SCATTER_ANNULUS_RIN = 3.0  # inner halo-annulus radius, in units of median FWHM (px)
+SCATTER_ANNULUS_ROUT = 5.0  # outer halo-annulus radius, in units of median FWHM (px)
+SCATTER_BOX_SIZE = 128     # Background2D mesh box size (px) for non-uniformity
+SCATTER_EPS = 1e-6         # guard for the non-uniformity denominator
 
 # Reason category labels (used for dominant_reject_cause aggregation).
 CAUSE_FWHM = "fwhm"
@@ -82,6 +97,7 @@ class SubMetrics:
     eccentricity: float | None  # median eccentricity (0 = round)
     snr: float | None           # median per-star SNR proxy
     background: float | None    # sigma-clipped median sky level
+    scattered_light: float | None = None  # bright-star halo / bkg non-uniformity
     error: str | None = None    # set if the sub could not be analyzed
 
 
@@ -143,6 +159,76 @@ def _median(values: np.ndarray) -> float | None:
     return float(np.nanmedian(arr))
 
 
+def _scattered_light(
+    data: np.ndarray,
+    data_sub: np.ndarray,
+    cat: SourceCatalog,
+    *,
+    median_fwhm: float | None,
+) -> float | None:
+    """Return a scattered-light figure (bright-star halos + bkg non-uniformity).
+
+    Two complementary veil signatures, each ~0 for a flat dark sky and elevated
+    under thin cirrus / scattered light, combined as their max:
+
+    - **halo ratio:** for the ``SCATTER_K`` brightest detected stars, a
+      ``CircularAnnulus`` at ``[RIN, ROUT] * median_fwhm`` measures the local sky
+      pedestal just outside the stellar core. Per star,
+      ``(annulus_median - global_bkg) / (peak - global_bkg)``; ``data_sub`` is
+      already background-subtracted, so this is ``annulus_median_sub /
+      max_value``. Non-positive peaks are skipped; the median over available
+      bright stars is the halo component.
+    - **non-uniformity:** ``std(Background2D.background_mesh) / (median + eps)``
+      -- the large-scale background structure a gradient / veil produces.
+
+    Returns ``None`` (never raises) if there are fewer than ``SCATTER_K`` usable
+    bright stars, the median FWHM is unusable, or the result is non-finite.
+    """
+    if median_fwhm is None or not np.isfinite(median_fwhm) or median_fwhm <= 0:
+        return None
+
+    peaks = np.asarray(cat.max_value, dtype=float)
+    xs = np.asarray(cat.xcentroid, dtype=float)
+    ys = np.asarray(cat.ycentroid, dtype=float)
+    ok = np.isfinite(peaks) & np.isfinite(xs) & np.isfinite(ys)
+    peaks, xs, ys = peaks[ok], xs[ok], ys[ok]
+    if peaks.size < SCATTER_K:
+        return None
+
+    order = np.argsort(peaks)[::-1][:SCATTER_K]
+    positions = np.column_stack([xs[order], ys[order]])
+    r_in = SCATTER_ANNULUS_RIN * median_fwhm
+    r_out = SCATTER_ANNULUS_ROUT * median_fwhm
+
+    # --- halo ratio over the K brightest stars (annulus on background-sub data).
+    ann = CircularAnnulus(positions, r_in=r_in, r_out=r_out)
+    ann_median = np.asarray(ApertureStats(data_sub, ann).median, dtype=float)
+    ratios: list[float] = []
+    for pedestal, peak in zip(ann_median, peaks[order]):
+        if not np.isfinite(pedestal) or not np.isfinite(peak) or peak <= 0:
+            continue
+        ratios.append(pedestal / peak)
+    halo = float(np.median(ratios)) if ratios else None
+
+    # --- large-scale background non-uniformity from a coarse Background2D mesh.
+    nonuniformity: float | None
+    try:
+        bkg = Background2D(data, box_size=SCATTER_BOX_SIZE)
+        mesh = np.asarray(bkg.background_mesh, dtype=float)
+        mesh = mesh[np.isfinite(mesh)]
+        if mesh.size:
+            nonuniformity = float(np.std(mesh) / (np.median(mesh) + SCATTER_EPS))
+        else:
+            nonuniformity = None
+    except Exception:  # noqa: BLE001 - non-uniformity is best-effort; halo suffices
+        nonuniformity = None
+
+    components = [c for c in (halo, nonuniformity) if c is not None and np.isfinite(c)]
+    if not components:
+        return None
+    return max(components)
+
+
 def analyze_sub(path: str | Path, *, name: str | None = None) -> SubMetrics:
     """Analyze one FITS sub into a :class:`SubMetrics`.
 
@@ -196,14 +282,20 @@ def analyze_sub(path: str | Path, *, name: str | None = None) -> SubMetrics:
         with np.errstate(divide="ignore", invalid="ignore"):
             snr = np.where(seg_err > 0, seg_flux / seg_err, np.nan)
 
+        median_fwhm = _median(fwhm)
+        scattered = _scattered_light(
+            data, data_sub, cat, median_fwhm=median_fwhm
+        )
+
         return SubMetrics(
             name=sub_name,
             star_count=int(segm.nlabels),
-            fwhm=_finite(_median(fwhm)),
+            fwhm=_finite(median_fwhm),
             hfr=_finite(_median(hfr)),
             eccentricity=_finite(_median(ecc)),
             snr=_finite(_median(snr)),
             background=_finite(median),
+            scattered_light=_finite(scattered),
             error=None,
         )
     except Exception as exc:  # noqa: BLE001 - never let a bad sub crash the run

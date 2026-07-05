@@ -103,10 +103,94 @@ def write_fixture(spec: FixtureSpec, out_dir: Path) -> Path:
     return path
 
 
+# --- hazy (thin cirrus / scattered light) fixture -------------------------
+# Same clean round stars as ``good`` (low FWHM, adequate star count, so it would
+# PASS the old FWHM/SNR/star-count floors) PLUS the *signature* of a veil:
+#   (a) a smooth large-scale background gradient/pedestal across the frame, and
+#   (b) a broad, low-amplitude Gaussian HALO around the brightest stars.
+# Both are kept below the 5-sigma detection threshold so they do not inflate the
+# per-star FWHM/eccentricity or knock down the star count -- they only lift the
+# local pedestal (halo ratio) and the large-scale background structure
+# (non-uniformity), which is exactly what the scattered_light metric measures.
+HAZY_NAME = "hazy"
+HAZY_SEED = (BASE_SEED, 4)          # np.random.default_rng([1234, 4])
+HAZY_N_STARS = 40
+HAZY_SIGMA = 2.0                    # same round core as ``good``
+HAZY_AMPLITUDE = 800.0
+HAZY_BACKGROUND = 100.0
+HAZY_NOISE = 10.0
+HAZY_GRADIENT = 45.0               # peak-to-peak large-scale gradient (counts)
+HAZY_PEDESTAL = 20.0              # broad smooth central pedestal (counts)
+HAZY_HALO_STARS = 5              # add halos around the N brightest stars
+HAZY_HALO_AMPLITUDE = 40.0       # halo peak (well below the ~50-count 5-sigma floor)
+HAZY_HALO_SIGMA = 10.0           # broad halo (px), several x the stellar core sigma
+
+
+def render_hazy() -> np.ndarray:
+    """Render the ``hazy`` sub: clean stars + gradient/pedestal + bright-star halos."""
+    rng = np.random.default_rng(list(HAZY_SEED))
+    ny, nx = IMAGE_SHAPE
+    img = np.zeros((ny, nx), dtype=np.float64)
+
+    xs = rng.uniform(EDGE_MARGIN, nx - EDGE_MARGIN, HAZY_N_STARS)
+    ys = rng.uniform(EDGE_MARGIN, ny - EDGE_MARGIN, HAZY_N_STARS)
+    amps = rng.uniform(0.85, 1.0, HAZY_N_STARS) * HAZY_AMPLITUDE
+    for x, y, amp in zip(xs, ys, amps):
+        model = Gaussian2D(
+            amplitude=amp, x_mean=x, y_mean=y,
+            x_stddev=HAZY_SIGMA, y_stddev=HAZY_SIGMA,
+        )
+        y0, y1 = int(y - STAMP_HALF), int(y + STAMP_HALF)
+        x0, x1 = int(x - STAMP_HALF), int(x + STAMP_HALF)
+        gy, gx = np.mgrid[y0:y1, x0:x1]
+        img[y0:y1, x0:x1] += model(gx, gy)
+
+    # (b) Broad low-amplitude halos around the brightest stars (full-frame grid so
+    # the halo wings reach into the annulus radius). Below detection threshold.
+    bright = np.argsort(amps)[::-1][:HAZY_HALO_STARS]
+    fy, fx = np.mgrid[0:ny, 0:nx]
+    for idx in bright:
+        halo = Gaussian2D(
+            amplitude=HAZY_HALO_AMPLITUDE, x_mean=xs[idx], y_mean=ys[idx],
+            x_stddev=HAZY_HALO_SIGMA, y_stddev=HAZY_HALO_SIGMA,
+        )
+        img += halo(fx, fy)
+
+    # (a) Smooth large-scale background: a linear gradient plus a broad central
+    # pedestal -- lifts the frame non-uniformly (scattered-light signature).
+    gx_norm = fx / (nx - 1)
+    gy_norm = fy / (ny - 1)
+    gradient = HAZY_GRADIENT * (0.6 * gx_norm + 0.4 * gy_norm)
+    pedestal = HAZY_PEDESTAL * np.exp(
+        -(((fx - nx / 2) ** 2 + (fy - ny / 2) ** 2) / (2.0 * (0.35 * nx) ** 2))
+    )
+    img += gradient + pedestal
+
+    img += HAZY_BACKGROUND
+    img += rng.normal(0.0, HAZY_NOISE, img.shape)
+    return img.astype(np.float32)
+
+
+def write_hazy(out_dir: Path) -> Path:
+    """Render + write ``hazy.fits`` into ``out_dir``; return the path."""
+    data = render_hazy()
+    header = fits.Header()
+    header["OBJECT"] = HAZY_NAME
+    header["QAFIX"] = (True, "synthetic QA fixture")
+    header["NSTARS"] = (HAZY_N_STARS, "injected star count")
+    header["HAZE"] = (True, "gradient + bright-star halos (scattered light)")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{HAZY_NAME}.fits"
+    fits.writeto(path, data, header=header, overwrite=True)
+    return path
+
+
 def make_all(out_dir: Path | str | None = None) -> dict[str, Path]:
     """(Re)create every fixture into ``out_dir`` (default: this directory)."""
     directory = Path(out_dir) if out_dir is not None else Path(__file__).parent
-    return {spec.name: write_fixture(spec, directory) for spec in SPECS}
+    out = {spec.name: write_fixture(spec, directory) for spec in SPECS}
+    out[HAZY_NAME] = write_hazy(directory)
+    return out
 
 
 if __name__ == "__main__":
