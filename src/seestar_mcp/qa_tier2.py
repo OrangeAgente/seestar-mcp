@@ -58,6 +58,7 @@ DETECT_NPIXELS = 5         # minimum connected pixels above threshold for a sour
 KERNEL_FWHM = 3.0          # FWHM (px) of the smoothing kernel used before detection
 KERNEL_SIZE = 5            # kernel support (px); odd, >= a few * KERNEL_FWHM/2
 SIGMA_CLIP = 3.0           # sigma for the sigma-clipped background statistics
+HFR_FLUX_FRACTION = 0.5    # flux fraction for the half-flux radius (HFR) measure
 
 # Reason category labels (used for dominant_reject_cause aggregation).
 CAUSE_FWHM = "fwhm"
@@ -124,6 +125,16 @@ def _load_image(path: Path) -> np.ndarray:
     raise ValueError("no 2-D image HDU found")
 
 
+def _finite(x: float | None) -> float | None:
+    """Return ``x`` only if it is a finite float; else ``None``.
+
+    Guards the JSON boundary: a non-finite metric (``nan``/``inf``) would emit a
+    bare ``NaN``/``Infinity`` token under ``json.dumps`` (invalid per RFC-8259),
+    so we coerce it to ``null`` before it ever reaches a ``SubMetrics``/report.
+    """
+    return x if (x is not None and np.isfinite(x)) else None
+
+
 def _median(values: np.ndarray) -> float | None:
     """NaN-safe median of a 1-D array, or None if empty / all-NaN."""
     arr = np.asarray(values, dtype=float)
@@ -143,7 +154,7 @@ def analyze_sub(path: str | Path, *, name: str | None = None) -> SubMetrics:
 
     try:
         data = _load_image(path)
-    except (FileNotFoundError, OSError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 - never let a bad sub crash the run
         return SubMetrics(
             name=sub_name, star_count=0, fwhm=None, hfr=None,
             eccentricity=None, snr=None, background=None,
@@ -155,7 +166,8 @@ def analyze_sub(path: str | Path, *, name: str | None = None) -> SubMetrics:
         median = float(median)
         std = float(std)
         if not np.isfinite(std) or std <= 0:
-            std = float(np.nanstd(data)) or 1.0
+            s = float(np.nanstd(data))
+            std = s if (np.isfinite(s) and s > 0) else 1.0
 
         data_sub = data - median
         kernel = make_2dgaussian_kernel(KERNEL_FWHM, size=KERNEL_SIZE)
@@ -166,7 +178,8 @@ def analyze_sub(path: str | Path, *, name: str | None = None) -> SubMetrics:
         if segm is None or segm.nlabels == 0:
             return SubMetrics(
                 name=sub_name, star_count=0, fwhm=None, hfr=None,
-                eccentricity=None, snr=None, background=median,
+                eccentricity=None, snr=None,
+                background=median if np.isfinite(median) else None,
                 error="no stars detected",
             )
 
@@ -177,7 +190,7 @@ def analyze_sub(path: str | Path, *, name: str | None = None) -> SubMetrics:
 
         fwhm = np.asarray(cat.fwhm, dtype=float)
         ecc = np.asarray(cat.eccentricity, dtype=float)
-        hfr = np.asarray(cat.fluxfrac_radius(0.5), dtype=float)
+        hfr = np.asarray(cat.fluxfrac_radius(HFR_FLUX_FRACTION), dtype=float)
         seg_flux = np.asarray(cat.segment_flux, dtype=float)
         seg_err = np.asarray(cat.segment_fluxerr, dtype=float)
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -186,11 +199,11 @@ def analyze_sub(path: str | Path, *, name: str | None = None) -> SubMetrics:
         return SubMetrics(
             name=sub_name,
             star_count=int(segm.nlabels),
-            fwhm=_median(fwhm),
-            hfr=_median(hfr),
-            eccentricity=_median(ecc),
-            snr=_median(snr),
-            background=median,
+            fwhm=_finite(_median(fwhm)),
+            hfr=_finite(_median(hfr)),
+            eccentricity=_finite(_median(ecc)),
+            snr=_finite(_median(snr)),
+            background=_finite(median),
             error=None,
         )
     except Exception as exc:  # noqa: BLE001 - never let a bad sub crash the run
@@ -365,10 +378,13 @@ def classify(metrics: list[SubMetrics], settings: Settings) -> SessionReport:
         wfwhm = None
 
     # Dominant reject cause = most common reject category across rejected subs.
+    # Every REJECT verdict carries at least one cause (error subs -> [CAUSE_ERROR]),
+    # so ``causes`` is never empty here. Ties break by first-encountered cause
+    # (Counter.most_common preserves insertion order for equal counts).
     cause_counter: Counter[str] = Counter()
     for v, causes in scored:
         if v.verdict == "REJECT":
-            cause_counter.update(causes or [CAUSE_ERROR])
+            cause_counter.update(causes)
     dominant = cause_counter.most_common(1)[0][0] if cause_counter else None
 
     return SessionReport(
@@ -438,8 +454,15 @@ def analyze_session(
 
 
 def render_json(report: SessionReport) -> str:
-    """Return the full structured report as pretty JSON."""
-    return json.dumps(dataclasses.asdict(report), indent=2, sort_keys=False)
+    """Return the full structured report as pretty JSON (strict RFC-8259).
+
+    ``allow_nan=False`` makes a stray non-finite metric fail loudly instead of
+    emitting a bare ``NaN``/``Infinity`` token; the ``_finite`` guard on metric
+    construction should mean this never trips on real data.
+    """
+    return json.dumps(
+        dataclasses.asdict(report), indent=2, sort_keys=False, allow_nan=False
+    )
 
 
 def _fmt(value: float | None, spec: str = ".3g") -> str:

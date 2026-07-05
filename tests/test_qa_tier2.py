@@ -54,6 +54,15 @@ def _settings(**overrides) -> Settings:
     return Settings(**overrides)
 
 
+def _strict_loads(js: str):
+    """Parse JSON, raising if it contains any NaN/Infinity token (strict RFC-8259)."""
+
+    def _reject(token: str):
+        raise ValueError(f"non-strict JSON constant: {token}")
+
+    return json.loads(js, parse_constant=_reject)
+
+
 # --- analyze_sub on real fixtures (photutils) -----------------------------
 
 
@@ -125,7 +134,7 @@ def test_classify_pass_and_each_reject_rule():
     # High FWHM REJECT via session sigma names FWHM + threshold + value.
     fwhm_v = verdicts["hi_fwhm"]
     assert fwhm_v.verdict == "REJECT"
-    assert any("fwhm" in r.lower() and "9.0" in r for r in fwhm_v.reasons)
+    assert any("fwhm" in r.lower() and "9.00" in r for r in fwhm_v.reasons)
 
     # Low SNR REJECT.
     snr_v = verdicts["lo_snr"]
@@ -162,6 +171,40 @@ def test_classify_error_sub_is_rejected():
     assert verdicts["broken"].verdict == "REJECT"
     assert any("could not analyze" in r.lower() for r in verdicts["broken"].reasons)
     assert "broken" not in report.keep_list
+
+
+def test_classify_reject_wins_over_marginal_and_keeps_both_reasons():
+    """A sub with a MARGINAL trigger on one metric and a REJECT trigger on another
+    ends REJECT, and BOTH reason strings are retained (audit completeness)."""
+    settings = _settings()
+    metrics = [
+        _clean("a"),
+        _clean("b"),
+        # ecc 0.50 => MARGINAL; snr 10 vs session median 200 => REJECT (< 100 floor).
+        _clean("mixed", eccentricity=0.50, snr=10.0),
+    ]
+    report = classify(metrics, settings)
+    mixed = {v.name: v for v in report.subs}["mixed"]
+
+    assert mixed.verdict == "REJECT"
+    joined = " ".join(mixed.reasons)
+    lower = joined.lower()
+    # The MARGINAL eccentricity reason is retained alongside the SNR REJECT.
+    assert "marginal" in lower and "eccentric" in lower
+    assert "reject" in lower and "snr" in lower
+    assert "mixed" not in report.keep_list
+
+
+def test_classify_single_sub_sigma_zero_not_fwhm_rejected_against_itself():
+    """With one successful sub, FWHM sigma is 0, so its FWHM equals the session
+    median+0*sigma threshold and must NOT reject itself."""
+    settings = _settings()
+    report = classify([_clean("solo", fwhm=4.5)], settings)
+    solo = {v.name: v for v in report.subs}["solo"]
+
+    assert solo.verdict == "PASS"
+    assert not any("fwhm" in r.lower() for r in solo.reasons)
+    assert "solo" in report.keep_list
 
 
 def test_classify_absolute_overrides_take_precedence():
@@ -217,7 +260,7 @@ def test_analyze_session_end_to_end(tmp_path):
 
     assert verdicts["bad_snr"].verdict == "REJECT"
     snr_reasons = " ".join(verdicts["bad_snr"].reasons).lower()
-    assert "snr" in snr_reasons or "star" in snr_reasons
+    assert "snr" in snr_reasons and "star" in snr_reasons
 
     assert "good" in report.keep_list
     assert "bad_ecc" not in report.keep_list
@@ -236,6 +279,24 @@ def test_analyze_session_end_to_end(tmp_path):
     assert lines
     records = [json.loads(line) for line in lines]
     assert any(r["tool"] == "qa_tier2.analyze_session" for r in records)
+
+
+def test_render_json_on_real_fixtures_is_strict_valid():
+    """render_json over real analyzer output must parse under STRICT JSON.
+
+    Pins both the Quantity-leak guard (astropy Quantities can't serialize) and
+    the NaN-token guard: a pathological sub could leave a non-finite metric that
+    json.dumps would otherwise emit as a bare ``NaN``. Uses a parse_constant that
+    raises on any NaN/Infinity token so a regression fails loudly.
+    """
+    paths = [FIXTURE_DIR / "good.fits",
+             FIXTURE_DIR / "bad_ecc.fits",
+             FIXTURE_DIR / "bad_snr.fits"]
+    report = analyze_session(paths, _settings(), target="M42")
+    js = render_json(report)
+    data = _strict_loads(js)  # raises on NaN/Infinity or invalid JSON
+    assert data["target"] == "M42"
+    assert len(data["subs"]) == 3
 
 
 # --- rendering & report writing -------------------------------------------
@@ -257,7 +318,7 @@ def _sample_report() -> SessionReport:
 
 def test_render_markdown_has_headline_and_table():
     md = render_markdown(_sample_report())
-    assert "1" in md and "2" in md  # kept 1 of 2
+    assert "Kept 1 of 2" in md
     assert "wFWHM" in md or "wfwhm" in md.lower()
     assert "eccentricity" in md.lower()
     # A per-sub table row for each sub.
