@@ -54,13 +54,13 @@ async def _tool_names() -> set[str]:
 def test_planning_tools_registered():
     names = asyncio.run(_tool_names())
     assert PLANNING_TOOLS <= names
-    assert len(asyncio.run(mcp.list_tools())) == 28
+    assert len(asyncio.run(mcp.list_tools())) == 30
 
 
 def test_project_tools_registered():
     names = asyncio.run(_tool_names())
     assert PROJECT_TOOLS <= names
-    assert len(asyncio.run(mcp.list_tools())) == 28
+    assert len(asyncio.run(mcp.list_tools())) == 30
 
 
 def test_goal_then_log_then_get(tmp_path):
@@ -266,3 +266,89 @@ def test_unknown_target(tmp_path):
     r = asyncio.run(c.get_target_observability("NotARealObject"))
     assert r["ok"] is False
     assert "unknown target" in r["error"].lower()
+
+
+# --- Autonomous-night tools (simulate_night / check_night_guardrails) -------
+
+AUTONOMOUS_TOOLS = {"simulate_night", "check_night_guardrails"}
+
+DARK = ("2026-07-05T02:00:00Z", "2026-07-05T08:00:00Z")
+
+
+def test_autonomous_tools_registered():
+    names = asyncio.run(_tool_names())
+    assert AUTONOMOUS_TOOLS <= names
+    assert len(asyncio.run(mcp.list_tools())) == 30
+
+
+def test_simulate_night_issues_no_motion(tmp_path, monkeypatch):
+    c = _controller(tmp_path)
+    assert asyncio.run(c.set_site_profile(name="Yard", lat=40.0, lon=-74.0))["ok"]
+
+    monkeypatch.setattr(server_mod, "dark_window", lambda site, when: DARK)
+
+    async def _fake_plan_targets(date=None, types=None, limit=None):
+        return {
+            "ok": True,
+            "conditions": {"go": True, "suitability": 88, "source": "open-meteo"},
+            "targets": [
+                {
+                    "id": "B",
+                    "name": "Beta",
+                    "best_window_utc": ["2026-07-05T04:30:00Z", "2026-07-05T06:00:00Z"],
+                    "recommended_subs": 300,
+                },
+                {
+                    "id": "A",
+                    "name": "Alpha",
+                    "best_window_utc": ["2026-07-05T02:30:00Z", "2026-07-05T04:00:00Z"],
+                    "recommended_subs": 300,
+                },
+            ],
+        }
+
+    monkeypatch.setattr(c, "plan_targets", _fake_plan_targets)
+
+    r = asyncio.run(c.simulate_night())
+    assert r["ok"] is True
+    assert r["conditions"] == {"go": True, "suitability": 88, "source": "open-meteo"}
+    assert r["dark_window_utc"] == list(DARK) or r["dark_window_utc"] == DARK
+    # Ordered, non-overlapping schedule (A before B by window start).
+    ids = [s["target_id"] for s in r["schedule"]]
+    assert ids == ["A", "B"]
+    assert r["schedule"][0]["end_utc"] <= r["schedule"][1]["start_utc"]
+    assert r["projected_targets"] == 2
+
+    # No motion whatsoever: the dry run touched no device command.
+    c.alpaca.method_sync.assert_not_called()
+    c.alpaca.put_property.assert_not_called()
+
+
+def test_check_guardrails_disconnected_parks(tmp_path, monkeypatch):
+    c = _controller(tmp_path)
+    assert asyncio.run(c.set_site_profile(name="Yard", lat=40.0, lon=-74.0))["ok"]
+
+    # Far-future dawn so the dawn-margin guardrail is not the trigger.
+    monkeypatch.setattr(
+        server_mod, "dark_window", lambda site, when: ("2026-07-05T02:00:00Z", "2099-01-01T00:00:00Z")
+    )
+
+    # Device state read fails -> _parse_device_health must yield connected=False.
+    c.alpaca.method_sync.side_effect = RuntimeError("no get_device_state")
+
+    async def _fake_assess(site, window, illum):
+        return _canned_conditions()
+
+    monkeypatch.setattr(server_mod, "assess_conditions_weather", _fake_assess)
+
+    r = asyncio.run(c.check_night_guardrails(session_start_utc="2026-07-05T02:30:00Z"))
+    assert r["ok"] is True
+    assert r["action"] == "park_and_stop"
+    assert r["proceed"] is False
+
+
+def test_check_guardrails_no_site(tmp_path):
+    c = _controller(tmp_path)
+    r = asyncio.run(c.check_night_guardrails(session_start_utc="2026-07-05T02:30:00Z"))
+    assert r["ok"] is False
+    assert "site" in r["error"].lower()
