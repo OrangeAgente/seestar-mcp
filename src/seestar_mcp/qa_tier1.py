@@ -1,0 +1,382 @@
+"""Tier-1 firmware-telemetry HEALTH monitor for the ZWO Seestar S50.
+
+Tier-1 trusts the device firmware: it polls the Seestar's own ``get_view_state``
+/ ``get_device_state`` telemetry (live-stack count, rejected-frame count,
+plate-solve state/RMS, focuser position, per-frame HFD, tracking) and emits a
+:class:`Tier1Snapshot` plus a small set of neutral, threshold-based *health
+flags*.
+
+IMPORTANT CONTRACT:
+- These flags are HEALTH SIGNALS for the anomaly playbook to interpret -- they
+  are NOT quality verdicts. Tier-1 never decides whether data is "good"; deciding
+  keep/reject on FWHM / eccentricity / SNR is Tier-2's job. No FWHM is computed
+  here.
+- Alt-Az field rotation makes rejected-frame counts rise (often after ~15 min);
+  late-session rejection is EXPECTED, not a fault. The flags merely describe the
+  signal; interpretation lives elsewhere.
+
+Device key names are NOT confirmed against firmware, so the parsers are tolerant
+of several spellings. Every such assumption is marked ``# FIRMWARE-DEPENDENT``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
+
+from .alpaca_client import AlpacaError
+
+if TYPE_CHECKING:
+    from .config import Settings
+    from .provenance import ProvenanceLog
+
+
+@dataclass
+class Tier1Snapshot:
+    """One poll of firmware telemetry (all fields optional; unknown -> None)."""
+
+    ts: str  # UTC ISO 8601
+    stacked: int | None = None  # live-stacked frame count
+    rejected: int | None = None  # rejected-frame count
+    solve_ok: bool | None = None  # plate-solve state healthy?
+    solve_rms: float | None = None
+    focus_pos: int | None = None
+    hfd: float | None = None  # half-flux-diameter focus-quality (if exposed)
+    tracking: bool | None = None
+    raw: dict = field(default_factory=dict)  # merged raw telemetry, for audit
+
+
+# --- tolerant coercion / lookup helpers -----------------------------------
+
+# Tokens (lowercased) that a firmware status string may use for a "healthy" /
+# "on" state.  # FIRMWARE-DEPENDENT
+_POSITIVE_TOKENS = {
+    "ok",
+    "true",
+    "yes",
+    "on",
+    "1",
+    "complete",
+    "completed",
+    "success",
+    "solved",
+    "done",
+    "tracking",
+    "working",
+}
+
+
+def _first(d: dict, *keys: str) -> Any:
+    """Return the first present, non-None value among ``keys`` in ``d``."""
+    for key in keys:
+        if key in d and d[key] is not None:
+            return d[key]
+    return None
+
+
+def _unwrap(d: Any) -> dict:
+    """Probe one level of common telemetry wrappers tolerantly.
+
+    Seestar/Alpaca payloads sometimes nest the real state under ``View``,
+    ``result`` or ``Value``.  # FIRMWARE-DEPENDENT
+    """
+    if not isinstance(d, dict):
+        return {}
+    for wrapper in ("View", "result", "Value"):
+        inner = d.get(wrapper)
+        if isinstance(inner, dict):
+            return inner
+    return d
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    """Coerce a bool / number / status-string into a tri-state bool."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if not token:
+            return None
+        return token in _POSITIVE_TOKENS
+    return None
+
+
+def _as_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# --- parsers (partial fields; missing key -> field omitted) ---------------
+
+
+def _parse_view_state(d: dict) -> dict:
+    """Parse ``get_view_state`` telemetry: stacking, rejection, solve, HFD.
+
+    Key names are tolerant/unconfirmed.  # FIRMWARE-DEPENDENT
+    """
+    d = _unwrap(d)
+    out: dict[str, Any] = {}
+
+    stacked = _as_int(
+        _first(d, "stacked_frame", "stacked", "stack_count", "lapse_count")
+    )
+    if stacked is not None:
+        out["stacked"] = stacked
+
+    rejected = _as_int(_first(d, "dropped_frame", "rejected", "bad_count"))
+    if rejected is not None:
+        out["rejected"] = rejected
+
+    solve_ok = _coerce_bool(_first(d, "plate_solve", "solve", "solve_state"))
+    if solve_ok is not None:
+        out["solve_ok"] = solve_ok
+
+    solve_rms = _as_float(_first(d, "rms", "solve_rms"))
+    if solve_rms is not None:
+        out["solve_rms"] = solve_rms
+
+    # HFD: average hfd_x/hfd_y when both present, else single value.
+    hfd_x = d.get("hfd_x")
+    hfd_y = d.get("hfd_y")
+    if hfd_x is not None and hfd_y is not None:
+        fx = _as_float(hfd_x)
+        fy = _as_float(hfd_y)
+        if fx is not None and fy is not None:
+            out["hfd"] = (fx + fy) / 2
+    else:
+        hfd = _as_float(_first(d, "hfd", "hfd_x"))
+        if hfd is not None:
+            out["hfd"] = hfd
+
+    return out
+
+
+def _parse_device_state(d: dict) -> dict:
+    """Parse ``get_device_state`` telemetry: focuser position, tracking.
+
+    Key names are tolerant/unconfirmed.  # FIRMWARE-DEPENDENT
+    """
+    d = _unwrap(d)
+    out: dict[str, Any] = {}
+
+    focus_pos = _as_int(_first(d, "focus_pos", "focuser_position", "step"))
+    if focus_pos is not None:
+        out["focus_pos"] = focus_pos
+
+    tracking = _coerce_bool(_first(d, "tracking", "track_state"))
+    if tracking is not None:
+        out["tracking"] = tracking
+
+    return out
+
+
+class Tier1Monitor:
+    """Polls firmware telemetry and emits neutral health flags.
+
+    The threshold parameters here are Tier-1 HEALTH thresholds -- distinct from
+    the Tier-2 QA thresholds carried in :class:`~seestar_mcp.config.Settings`.
+    """
+
+    def __init__(
+        self,
+        alpaca: Any,
+        *,
+        provenance: ProvenanceLog | None = None,
+        stall_polls: int = 2,
+        rejection_spike_delta: int = 10,
+        focus_drift_tol: int = 25,
+        hfd_rise_tol: float = 0.5,
+    ) -> None:
+        self._alpaca = alpaca
+        self._provenance = provenance
+        self.stall_polls = stall_polls
+        self.rejection_spike_delta = rejection_spike_delta
+        self.focus_drift_tol = focus_drift_tol
+        self.hfd_rise_tol = hfd_rise_tol
+        self.history: list[Tier1Snapshot] = []
+        self.focus_baseline: int | None = None
+
+    @classmethod
+    def from_settings(
+        cls,
+        settings: Settings,
+        alpaca: Any,
+        provenance: ProvenanceLog | None = None,
+    ) -> Tier1Monitor:
+        """Build a monitor with default Tier-1 thresholds.
+
+        ``settings`` currently carries no Tier-1 fields; only ``alpaca`` and
+        ``provenance`` are wired through. Do not read Tier-2 QA thresholds here.
+        """
+        return cls(alpaca, provenance=provenance)
+
+    # --- polling ----------------------------------------------------------
+
+    async def _safe_call(self, method: str) -> tuple[dict, str | None]:
+        """Call ``method_sync(method)``; on ``AlpacaError`` return ({}, error).
+
+        A single failed sub-call must not crash a poll, so the failure is
+        captured (and later recorded in ``raw``) rather than raised.
+        """
+        try:
+            result = await self._alpaca.method_sync(method)
+        except AlpacaError as exc:
+            return {}, str(exc)
+        return (result if isinstance(result, dict) else {}), None
+
+    async def poll(self) -> Tier1Snapshot:
+        """Poll view + device telemetry into one :class:`Tier1Snapshot`."""
+        view, view_err = await self._safe_call("get_view_state")
+        dev, dev_err = await self._safe_call("get_device_state")
+
+        view_fields = _parse_view_state(view)
+        dev_fields = _parse_device_state(dev)
+
+        raw: dict[str, Any] = {"view": view, "device": dev}
+        if view_err is not None:
+            raw["view_error"] = view_err
+        if dev_err is not None:
+            raw["device_error"] = dev_err
+
+        snapshot = Tier1Snapshot(
+            ts=datetime.now(timezone.utc).isoformat(),
+            stacked=view_fields.get("stacked"),
+            rejected=view_fields.get("rejected"),
+            solve_ok=view_fields.get("solve_ok"),
+            solve_rms=view_fields.get("solve_rms"),
+            focus_pos=dev_fields.get("focus_pos"),
+            hfd=view_fields.get("hfd"),
+            tracking=dev_fields.get("tracking"),
+            raw=raw,
+        )
+
+        self.history.append(snapshot)
+        if self.focus_baseline is None and snapshot.focus_pos is not None:
+            self.focus_baseline = snapshot.focus_pos
+
+        if self._provenance is not None:
+            self._provenance.log_call(
+                tool="qa_tier1.poll",
+                args={
+                    "stacked": snapshot.stacked,
+                    "rejected": snapshot.rejected,
+                    "solve_ok": snapshot.solve_ok,
+                    "focus_pos": snapshot.focus_pos,
+                },
+            )
+
+        return snapshot
+
+    def set_focus_baseline(self, pos: int) -> None:
+        """Set the reference focuser position used for drift trends."""
+        self.focus_baseline = pos
+
+    # --- derived signals --------------------------------------------------
+
+    def trends(self) -> dict:
+        """Compute inter-poll deltas. Safe with fewer than 2 snapshots."""
+        out: dict[str, Any] = {
+            "stacked_delta": None,
+            "rejected_delta": None,
+            "focus_delta": None,
+            "hfd_delta": None,
+        }
+
+        if self.history:
+            latest = self.history[-1]
+            if latest.focus_pos is not None and self.focus_baseline is not None:
+                out["focus_delta"] = latest.focus_pos - self.focus_baseline
+
+        if len(self.history) >= 2:
+            prev = self.history[-2]
+            latest = self.history[-1]
+            if prev.stacked is not None and latest.stacked is not None:
+                out["stacked_delta"] = latest.stacked - prev.stacked
+            if prev.rejected is not None and latest.rejected is not None:
+                out["rejected_delta"] = latest.rejected - prev.rejected
+            if prev.hfd is not None and latest.hfd is not None:
+                out["hfd_delta"] = latest.hfd - prev.hfd
+
+        return out
+
+    def check(self) -> list[str]:
+        """Return neutral HEALTH FLAGS (not verdicts) from history+thresholds.
+
+        Each flag is a signal for the anomaly playbook to interpret. In Alt-Az,
+        a late-session ``rejection_spike`` is expected, not necessarily a fault.
+        """
+        flags: list[str] = []
+        trends = self.trends()
+
+        # Stacking stalled: last ``stall_polls`` snapshots show no increase.
+        if len(self.history) >= self.stall_polls:
+            window = self.history[-self.stall_polls :]
+            stacked_vals = [snap.stacked for snap in window]
+            if all(v is not None for v in stacked_vals):
+                if stacked_vals[-1] <= stacked_vals[0]:
+                    flags.append("stacking_stalled")
+
+        rejected_delta = trends["rejected_delta"]
+        if rejected_delta is not None and rejected_delta >= self.rejection_spike_delta:
+            flags.append("rejection_spike")
+
+        focus_delta = trends["focus_delta"]
+        if focus_delta is not None and abs(focus_delta) > self.focus_drift_tol:
+            flags.append("focus_drift")
+
+        if self.history and self.history[-1].solve_ok is False:
+            flags.append("solve_lost")
+
+        hfd_delta = trends["hfd_delta"]
+        if hfd_delta is not None and hfd_delta > self.hfd_rise_tol:
+            flags.append("hfd_rising")
+
+        return flags
+
+    def status_line(self) -> str:
+        """Compact one-liner for the phone UI; omits unknown fields gracefully."""
+        if not self.history:
+            return ""
+        latest = self.history[-1]
+        trends = self.trends()
+        parts: list[str] = []
+
+        if latest.stacked is not None:
+            stacked_delta = trends["stacked_delta"]
+            if stacked_delta is not None:
+                parts.append(f"stacked {latest.stacked} ({stacked_delta:+d})")
+            else:
+                parts.append(f"stacked {latest.stacked}")
+
+        if latest.rejected is not None:
+            parts.append(f"rejected {latest.rejected}")
+
+        if latest.solve_ok is not None:
+            parts.append("solve OK" if latest.solve_ok else "solve LOST")
+
+        focus_delta = trends["focus_delta"]
+        if focus_delta is not None:
+            parts.append(f"focus Δ={focus_delta:+d}")
+
+        if latest.hfd is not None:
+            parts.append(f"hfd {latest.hfd:.2f}")
+
+        return " | ".join(parts)
