@@ -1,0 +1,59 @@
+# Hardened, unprivileged systemd unit for seestar-mcp on the Jetson.
+#
+# BEFORE USE, fill in for your target host:
+#   <SEESTAR_IP>  - the Seestar's fixed LAN IP (DHCP reservation, station mode)
+#   User/Group    - a dedicated NON-ROOT service account (e.g. `seestar`)
+#   paths         - WorkingDirectory, ExecStart --directory, ReadWritePaths
+#
+# This unit MUST NOT run as root, and it opens NO listening socket: seestar-mcp
+# speaks MCP over stdio. Remote Control's outbound HTTPS to Anthropic is made by
+# the separate Claude Code process, NOT by this unit. This unit's only egress is
+# to localhost (seestar_alp :5555) and the Seestar's data ports on the LAN.
+
+[Unit]
+Description=seestar-mcp (auditable MCP server for the ZWO Seestar S50)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# --- run as a dedicated, unprivileged account (NEVER root) ---
+User=seestar
+Group=seestar
+
+# --- working dir + launch via uv (uses the hash-locked env) ---
+WorkingDirectory=/opt/seestar-mcp
+ExecStart=/usr/bin/uv --directory /opt/seestar-mcp run python -m seestar_mcp.server
+
+# --- process hardening / sandbox ---
+NoNewPrivileges=yes
+ProtectSystem=strict          # entire filesystem read-only except ReadWritePaths
+ProtectHome=yes               # no access to /home, /root, /run/user
+PrivateTmp=yes                # private /tmp, /var/tmp
+PrivateDevices=yes            # no physical device nodes (stdio MCP needs none)
+ProtectKernelTunables=yes     # /proc/sys, /sys read-only
+ProtectControlGroups=yes      # cgroup hierarchy read-only
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes     # no W^X pages
+SystemCallFilter=@system-service
+
+# --- least-privilege writable paths (ONLY the data/manifests dir) ---
+ReadWritePaths=/opt/seestar-mcp/data
+
+# --- egress allowlist: localhost + the Seestar ONLY ---
+# Denies all outbound traffic, then re-allows loopback (seestar_alp :5555) and
+# the Seestar's LAN IP (native JSON-RPC :4700, HTTP :80, SMB :445). This unit
+# has NO reason to reach anything else; Remote Control's HTTPS is a different
+# process. Replace <SEESTAR_IP> with the device's fixed address.
+IPAddressDeny=any
+IPAddressAllow=localhost <SEESTAR_IP>
+
+# --- restart policy ---
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
