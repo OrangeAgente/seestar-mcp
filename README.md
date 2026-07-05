@@ -88,9 +88,9 @@ The firmware-7.18+ RSA key and any tokens live in `./secrets/` (gitignored) or i
 `SEESTAR_SECRET_*` environment variables, loaded on demand by `secrets.py` and never written
 to config, source, or the provenance log.
 
-## Tools (30)
+## Tools (33)
 
-The server exposes exactly 30 single-purpose, least-privilege tools with honest,
+The server exposes exactly 33 single-purpose, least-privilege tools with honest,
 non-obfuscated descriptions. Destructive/motion tools are clearly labelled `SIDE EFFECT` in
 their descriptions; Skills gate them behind explicit user confirmation.
 
@@ -142,6 +142,9 @@ weather). Read-only except `set_site_profile`, which writes the site profile.
 | `plan_targets` | Ranked, reasoned target shortlist with best windows and recommended integration. Read-only. |
 | `simulate_night` | Dry-run tonight's autonomous plan (ordered target schedule) WITHOUT moving the scope. Read-only. |
 | `check_night_guardrails` | Evaluate hard-stop conditions for an autonomous run (dawn, battery, weather, connection, max duration). Read-only. |
+| `log_sky_result` | Record one plate-solve outcome, binned by (az, alt); weather-gated so cloudy failures never count as obstructions. |
+| `suggest_horizon_mask` | Return learned obstruction arcs with evidence (nights, failure rate) for review. **Read-only — suggests, never applies.** |
+| `add_horizon_mask` | Append one user-confirmed obstruction arc to the site profile's horizon mask (explicit user action). |
 
 ### Projects / history
 
@@ -173,6 +176,21 @@ suppresses recently-imaged ones, and can recommend what to shoot next) and **liv
 reactivity**: `run-session` consults the plan, watches conditions during a session, switches
 target when one leaves its sweet band, and logs each session's result back into its project
 at wind-down.
+
+### Learned horizon mask
+
+The horizon mask is **learned-and-confirmed**, not just hand-declared. `log_sky_result`
+accumulates plate-solve outcomes binned by (azimuth, altitude) across nights, and
+`suggest_horizon_mask` proposes obstruction arcs — but only when the evidence is
+unambiguous: **weather-gated** (cloudy-sky failures are excluded), **cross-night** (a
+bearing must fail on several distinct clear nights), **low-altitude** (obstructions are
+near the horizon; a high blank is never a tree), and **GPS-checked** (records and the mask
+are scoped to the site where they were recorded). It is **suggest-and-confirm**: the mask
+is **never auto-applied** — the user reviews the evidence and confirms each arc via
+`add_horizon_mask`. Every plan (`plan_targets` / `assess_conditions` / `simulate_night`)
+returns a `location` block reconciling the scope's live GPS with the saved site; if the
+scope has moved beyond tolerance the stale mask is **not applied** and the mismatch is
+disclosed.
 
 ## Autonomous night
 

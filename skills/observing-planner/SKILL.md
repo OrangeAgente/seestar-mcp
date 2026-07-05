@@ -44,6 +44,19 @@ phone-friendly (Remote Control): lead with the verdict, then the top 3.
      but make the caveat plain.
    - `go: null` / `source: "unknown"` → weather is unavailable; say so, plan on
      observability alone, and tell the user to eyeball the actual sky before slewing.
+4. **Check the `location` block.** `assess_conditions`, `plan_targets`, and
+   `simulate_night` each now return a `location` block (`matched`, `distance_km`,
+   `site_name`, `mask_applied`, `warning`) — the scope's live GPS reconciled against
+   the saved site profile. Read it before trusting the plan:
+   - `location.mask_applied` **False** → the scope has moved beyond the site's
+     tolerance, so the saved horizon mask / learned obstructions were **NOT** applied.
+     **Disclose it in one line**, e.g.
+     `Scope ~48 km from 'Backyard' — horizon mask OFF; set a profile for this location.`
+     Do **not** treat the saved mask or obstructions as active for this plan (targets
+     behind the home mask are not blocked here — the mask belongs to another site).
+   - `location.matched` **null** → GPS is unverified; the plan assumes the saved site.
+     Note that assumption **once**, e.g. `GPS unverified — assuming site 'Backyard'.`
+   - `location.matched` **True** → the mask applies normally; no extra note needed.
 
 ## Phase 1 — Target shortlist
 1. `plan_targets` (optionally pass `types`, `min_alt`, or `limit` if the user asked
@@ -77,6 +90,23 @@ phone-friendly (Remote Control): lead with the verdict, then the top 3.
 - QA interpretation of the resulting subs stays with the **`qa-policy`** skill; faults
   mid-session go to **`anomaly-playbook`**.
 
+## Phase 3 — Learn obstructions (log solves, suggest mask)
+The horizon mask is *learned-and-confirmed*, not hand-declared: cross-night, clear-sky
+plate-solve failures at a low, isolated bearing are what trees / roofline / power lines
+look like. Feed the learner, and surface — never auto-apply — what it finds.
+1. **Log each plate-solve outcome.** After a solve at a target, call
+   `log_sky_result(target=<id>, solved=<bool>)`. Weather is read and gated
+   automatically — a failure recorded under a no-go sky is tagged weather-excluded and
+   never counts as obstruction evidence — so you do not have to pre-filter clouds.
+2. **Surface suggestions at wind-down, or when asked "what's blocking my view?".** Call
+   `suggest_horizon_mask` (read-only — it suggests, never applies). Present each
+   candidate arc **with its evidence** — the failing bearing, the number of distinct
+   clear nights, and the failure rate — e.g.
+   `Seen 90–100° / ~22° fail on 4 clear nights (5/6 solves) — a fixed obstruction? Add to the mask?`
+3. **Confirm before applying.** Offer to add each arc the user approves via
+   `add_horizon_mask(az_min, az_max, alt_min)`. Only add the specific arcs the user
+   confirms; leave the rest for more evidence.
+
 ## Hard rules
 - Never invent ephemeris or weather — always call `assess_conditions` /
   `plan_targets` / `get_target_observability` and quote what they return.
@@ -87,3 +117,9 @@ phone-friendly (Remote Control): lead with the verdict, then the top 3.
 - Keep it tight: lead with the one-line verdict and the top 3. Detail on request.
 - This skill decides *what and whether*; `run-session` decides *how* and owns all
   motion. Do not issue goto/stack commands from here.
+- When `location.mask_applied` is False, disclose it in one line and treat the saved
+  mask/obstructions as inactive for that plan — never silently apply a stale mask at a
+  moved location.
+- Never call `add_horizon_mask` without the user's explicit confirmation of a specific
+  suggested arc. `suggest_horizon_mask` only proposes; the mask is only ever edited by a
+  user-approved `add_horizon_mask` (or `set_site_profile`).

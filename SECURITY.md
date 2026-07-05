@@ -58,6 +58,19 @@ disconnected) the run stops. Every guardrail decision is **provenance-logged**. 
 adds **no new network host and no inbound surface** — it is the same audited, honestly
 described tools driven in a visible loop, still subject to every control below.
 
+### Learned horizon mask
+
+The horizon mask is **never auto-edited.** Obstruction inference (`log_sky_result` →
+`suggest_horizon_mask`) only *suggests* arcs with evidence; the mask is changed solely by
+an explicit user `add_horizon_mask` (or `set_site_profile`) after reviewing that evidence.
+Inference is **weather-gated** (failures under a no-go sky are recorded weather-excluded
+and never count as an obstruction) and **location-scoped** (records carry their lat/lon and
+only aggregate near the queried site). The **GPS reconcile** on every plan prevents applying
+a **stale mask at a new site** — if the scope has moved beyond the profile's tolerance the
+saved mask is not applied and the mismatch is disclosed in the plan's `location` block. The
+learner's state lives in `data/sky_failures.json` — **local, gitignored, no secrets**, no
+new network host or dependency.
+
 ## OWASP MCP Top 10 — mitigations
 
 | Risk | Our concrete control |
