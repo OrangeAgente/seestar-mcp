@@ -39,6 +39,11 @@ EXPECTED_TOOLS = {
     "assess_conditions",
     "get_target_observability",
     "plan_targets",
+    "list_projects",
+    "get_project",
+    "set_project_goal",
+    "log_session_result",
+    "recommend_projects",
 }
 
 # Destructive / motion / side-effecting tools that MUST state their effect.
@@ -52,10 +57,10 @@ DESTRUCTIVE = {
 }
 
 
-async def test_exactly_23_tools_with_expected_names():
+async def test_exactly_28_tools_with_expected_names():
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
-    assert len(tools) == 23
+    assert len(tools) == 28
     assert names == EXPECTED_TOOLS
 
 

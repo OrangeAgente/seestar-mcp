@@ -27,6 +27,14 @@ PLANNING_TOOLS = {
     "plan_targets",
 }
 
+PROJECT_TOOLS = {
+    "list_projects",
+    "get_project",
+    "set_project_goal",
+    "log_session_result",
+    "recommend_projects",
+}
+
 
 def _controller(tmp_path) -> SeestarController:
     """A controller whose site profile persists under ``tmp_path``."""
@@ -46,7 +54,60 @@ async def _tool_names() -> set[str]:
 def test_planning_tools_registered():
     names = asyncio.run(_tool_names())
     assert PLANNING_TOOLS <= names
-    assert len(asyncio.run(mcp.list_tools())) == 23
+    assert len(asyncio.run(mcp.list_tools())) == 28
+
+
+def test_project_tools_registered():
+    names = asyncio.run(_tool_names())
+    assert PROJECT_TOOLS <= names
+    assert len(asyncio.run(mcp.list_tools())) == 28
+
+
+def test_goal_then_log_then_get(tmp_path):
+    c = _controller(tmp_path)
+    g = asyncio.run(c.set_project_goal("M31", 360))
+    assert g["ok"] is True
+    assert g["project"]["goal_minutes"] == 360
+
+    logged = asyncio.run(c.log_session_result("M31", 25, 160, 150))
+    assert logged["ok"] is True
+    assert logged["project"]["collected_minutes"] == 25
+
+    got = asyncio.run(c.get_project("M31"))
+    assert got["ok"] is True
+    assert got["project"]["collected_minutes"] == 25
+    assert len(got["project"]["sessions"]) == 1
+
+
+def test_get_project_unknown(tmp_path):
+    c = _controller(tmp_path)
+    r = asyncio.run(c.get_project("M999"))
+    assert r["ok"] is False
+    assert "no project" in r["error"].lower()
+
+
+def test_list_projects_empty_then_populated(tmp_path):
+    c = _controller(tmp_path)
+    empty = asyncio.run(c.list_projects())
+    assert empty["ok"] is True
+    assert empty["count"] == 0
+    assert empty["projects"] == []
+
+    asyncio.run(c.set_project_goal("M31", 360))
+    populated = asyncio.run(c.list_projects())
+    assert populated["ok"] is True
+    assert populated["count"] == 1
+    assert populated["projects"][0]["target_id"] == "M31"
+
+
+def test_recommend_projects_tool(tmp_path):
+    c = _controller(tmp_path)
+    asyncio.run(c.set_project_goal("M31", 360))
+    asyncio.run(c.log_session_result("M31", 60, 100, 90))
+    recs = asyncio.run(c.recommend_projects())
+    assert recs["ok"] is True
+    assert recs["count"] == 1
+    assert recs["projects"][0]["target_id"] == "M31"
 
 
 def test_set_then_get_site_profile(tmp_path):
@@ -135,6 +196,68 @@ def test_plan_targets_with_mocked_engine(tmp_path, monkeypatch):
     assert t["sweet_band_min"] == 120
     # Compact: no bulky nested observability dumped per target.
     assert "observability" not in t
+
+
+def test_plan_targets_compact_and_project_aware(tmp_path, monkeypatch):
+    c = _controller(tmp_path)
+    assert asyncio.run(c.set_site_profile(name="Yard", lat=40.0, lon=-74.0, bortle=6))["ok"]
+    # Seed a project so a non-empty store is loaded and passed through.
+    asyncio.run(c.set_project_goal("M27", 360))
+
+    monkeypatch.setattr(server_mod, "dark_window", lambda site, when: ("a", "b"))
+    monkeypatch.setattr(server_mod, "moon_illumination", lambda when: 0.1)
+    monkeypatch.setattr(server_mod, "load_catalog", lambda: [])
+
+    async def _fake_assess(site, window, illum):
+        return _canned_conditions()
+
+    monkeypatch.setattr(server_mod, "assess_conditions_weather", _fake_assess)
+
+    captured = {}
+
+    def _fake_rank(*a, **k):
+        captured.update(k)
+        return [_canned_plan()]
+
+    monkeypatch.setattr(server_mod, "rank_targets", _fake_rank)
+
+    r = asyncio.run(c.plan_targets(prefer_projects=True, avoid_recent_days=3))
+    assert r["ok"] is True
+    assert r["count"] == 1
+    t = r["targets"][0]
+    assert t["id"] == "M27"
+    assert "observability" not in t  # compact output unchanged
+    # Project-aware: the loaded projects + clock were threaded into the ranker.
+    assert captured["projects"] is not None
+    assert "M27" in captured["projects"]
+    assert captured["now_utc"] is not None
+    assert captured["recent_days"] == 3
+
+
+def test_plan_targets_no_projects_when_disabled(tmp_path, monkeypatch):
+    c = _controller(tmp_path)
+    assert asyncio.run(c.set_site_profile(name="Yard", lat=40.0, lon=-74.0, bortle=6))["ok"]
+
+    monkeypatch.setattr(server_mod, "dark_window", lambda site, when: ("a", "b"))
+    monkeypatch.setattr(server_mod, "moon_illumination", lambda when: 0.1)
+    monkeypatch.setattr(server_mod, "load_catalog", lambda: [])
+
+    async def _fake_assess(site, window, illum):
+        return _canned_conditions()
+
+    monkeypatch.setattr(server_mod, "assess_conditions_weather", _fake_assess)
+
+    captured = {}
+
+    def _fake_rank(*a, **k):
+        captured.update(k)
+        return []
+
+    monkeypatch.setattr(server_mod, "rank_targets", _fake_rank)
+
+    r = asyncio.run(c.plan_targets(prefer_projects=False))
+    assert r["ok"] is True
+    assert captured["projects"] is None
 
 
 def test_unknown_target(tmp_path):
