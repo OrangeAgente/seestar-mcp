@@ -1,4 +1,4 @@
-"""FastMCP server for seestar-mcp: 28 auditable Seestar S50 control/QA/planning tools.
+"""FastMCP server for seestar-mcp: 30 auditable Seestar S50 control/QA/planning tools.
 
 Two layers, deliberately separated for testability:
 
@@ -37,6 +37,7 @@ from mcp.server.fastmcp import FastMCP
 from .alpaca_client import AlpacaClient, AlpacaError, AlpacaNotImplemented
 from .data_client import DataClient
 from .planning.astro import dark_window, moon_illumination, observability
+from .planning.autonomous import evaluate_guardrails, plan_night
 from .planning.catalog import find_target, load_catalog
 from .planning.projects import (
     get_project as _get_project,
@@ -755,6 +756,106 @@ class SeestarController:
         except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
             return {"ok": False, "error": str(exc)}
 
+    # --- autonomous night -------------------------------------------------
+
+    async def simulate_night(
+        self,
+        date: str | None = None,
+        types: list[str] | None = None,
+        limit: int | None = None,
+    ) -> dict:
+        """Dry-run tonight's autonomous plan as an ordered target schedule.
+
+        Reads/computes only — issues NO device motion. Ranks tonight's targets
+        via :meth:`plan_targets`, then greedily packs them into the dark window
+        with the pure :func:`plan_night` sequencer. Reads the clock only to
+        resolve "tonight" when ``date`` is omitted.
+        """
+        try:
+            self.provenance.log_call(
+                tool="simulate_night",
+                args={"date": date, "types": types, "limit": limit},
+            )
+            when = date or datetime.now(timezone.utc).isoformat()
+            site = load_site(self._site_path())
+            if site is None:
+                return {"ok": False, "error": "no site profile set"}
+            plan = await self.plan_targets(date=when, types=types, limit=limit)
+            if not plan.get("ok"):
+                return plan
+            dark = dark_window(site, when)
+            sched = plan_night(plan["targets"], dark)
+            return {
+                "ok": True,
+                "conditions": plan.get("conditions"),
+                "dark_window_utc": dark,
+                "schedule": [dataclasses.asdict(s) for s in sched],
+                "projected_targets": len(sched),
+            }
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
+    async def check_night_guardrails(
+        self,
+        session_start_utc: str,
+        max_session_hours: float = 10.0,
+        battery_floor_pct: float = 20.0,
+        dawn_margin_min: float = 15.0,
+    ) -> dict:
+        """Evaluate the hard-stop safety conditions for one autonomous iteration.
+
+        Gathers live device health and weather best-effort, then hands them to
+        the pure :func:`evaluate_guardrails`. If device health cannot be
+        confirmed (no ``get_device_state``), it fails SAFE — ``connected=False``
+        forces a ``park_and_stop`` verdict. Reads the clock only for "now".
+        """
+        try:
+            self.provenance.log_call(
+                tool="check_night_guardrails",
+                args={
+                    "session_start_utc": session_start_utc,
+                    "max_session_hours": max_session_hours,
+                    "battery_floor_pct": battery_floor_pct,
+                    "dawn_margin_min": dawn_margin_min,
+                },
+            )
+            now = datetime.now(timezone.utc).isoformat()
+            site = load_site(self._site_path())
+            if site is None:
+                return {"ok": False, "error": "no site profile set"}
+            dark = dark_window(site, now)
+
+            # Live device health — fail SAFE to (disconnected, unverified,
+            # unknown) on ANY failure so a lost link parks the run.
+            try:
+                dev = await self.alpaca.method_sync("get_device_state")
+                connected, verified, battery = _parse_device_health(dev)
+            except Exception:  # noqa: BLE001 - any device fault → fail safe
+                connected, verified, battery = (False, False, None)
+
+            # Weather is best-effort and non-fatal: an outage → unknown, which
+            # the guardrail core treats as observability-only, not a hard stop.
+            try:
+                weather_go = (await assess_conditions_weather(site, dark, 0.0)).go
+            except Exception:  # noqa: BLE001 - weather outage is non-fatal
+                weather_go = None
+
+            verdict = evaluate_guardrails(
+                now_utc=now,
+                dark_window_utc=dark,
+                session_start_utc=session_start_utc,
+                battery_pct=battery,
+                weather_go=weather_go,
+                connected=connected,
+                verified=verified,
+                max_session_hours=max_session_hours,
+                battery_floor_pct=battery_floor_pct,
+                dawn_margin_min=dawn_margin_min,
+            )
+            return {"ok": True, **dataclasses.asdict(verdict)}
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
+
     # --- projects ---------------------------------------------------------
 
     async def list_projects(self) -> dict:
@@ -941,6 +1042,29 @@ def _extract_focus_pos(focus: Any) -> int | None:
             if isinstance(val, (int, float)):
                 return int(val)
     return None
+
+
+def _parse_device_health(dev: Any) -> tuple[bool, bool, float | None]:
+    """Extract ``(connected, verified, battery_pct)`` from ``get_device_state``.
+
+    # FIRMWARE-DEPENDENT: the ``get_device_state`` schema is unconfirmed against
+    hardware — the identity-verification flag and the battery-level key are best
+    guesses isolated to this single helper (update here when the real shape is
+    known). ``connected`` is True only when we got a usable dict back; a battery
+    field is searched across the plausible key names below. Any malformed/empty
+    input fails SAFE to ``(False, False, None)`` so a lost link parks the run.
+    """
+    if not isinstance(dev, dict) or not dev:
+        return (False, False, None)
+    verified = bool(dev.get("is_verified", dev.get("verified", False)))
+    battery: float | None = None
+    # FIRMWARE-DEPENDENT: real battery key unconfirmed — try the likely names.
+    for key in ("battery_capacity", "battery", "bat_capacity"):
+        val = dev.get(key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            battery = float(val)
+            break
+    return (True, verified, battery)
 
 
 # ===========================================================================
@@ -1263,6 +1387,41 @@ async def recommend_projects(limit: int | None = None) -> dict:
     count.
     """
     return await get_controller().recommend_projects(limit)
+
+
+@mcp.tool()
+async def simulate_night(
+    date: str | None = None,
+    types: list[str] | None = None,
+    limit: int | None = None,
+) -> dict:
+    """Dry-run tonight's autonomous plan as an ordered target schedule WITHOUT
+    moving the telescope. Use this to preview/confirm an autonomous night before
+    it starts.
+
+    Read-only/compute-only: ranks tonight's targets and packs them into the dark
+    window, issuing zero device motion. ``date`` (ISO UTC) overrides "tonight".
+    """
+    return await get_controller().simulate_night(date, types, limit)
+
+
+@mcp.tool()
+async def check_night_guardrails(
+    session_start_utc: str,
+    max_session_hours: float = 10.0,
+    battery_floor_pct: float = 20.0,
+    dawn_margin_min: float = 15.0,
+) -> dict:
+    """Evaluate hard-stop conditions for an unattended run (approaching dawn, low
+    battery, weather no-go, lost connection, max session duration). Returns
+    whether to continue or park-and-stop.
+
+    Read-only: gathers live device health + weather and returns a verdict; fails
+    SAFE to ``park_and_stop`` if the scope's health cannot be confirmed.
+    """
+    return await get_controller().check_night_guardrails(
+        session_start_utc, max_session_hours, battery_floor_pct, dawn_margin_min
+    )
 
 
 def main() -> None:
