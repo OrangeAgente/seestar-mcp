@@ -28,6 +28,7 @@ downloaded sub (with a sha256 hash binding the file into the chain of custody).
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,9 +72,25 @@ class SubInfo:
     target: str | None = None
 
 
-def _basename(path: str) -> str:
-    """Return the final path component, splitting on both / and \\."""
-    return re.split(r"[\\/]", path)[-1]
+def _safe_name(raw: str) -> str:
+    """Reduce an UNTRUSTED listing name to a bare, separator-free filename.
+
+    The device listing is untrusted (a spoofed or MITM'd Seestar can return
+    arbitrary entries), so a name may contain path separators, ``..`` segments,
+    or an absolute path/drive. We normalize backslashes to forward slashes
+    first (so Windows-style ``..\\..\\x`` is neutralized even on POSIX), take
+    the final path component, and strip any residual leading separators or
+    drive. Returns "" for an empty / ``.`` / ``..`` result so the caller can
+    reject it. The result can never contain a directory separator.
+    """
+    candidate = os.path.basename(raw.replace("\\", "/")).strip()
+    # Defensive: strip any residual leading separators / drive letter remnant.
+    candidate = candidate.lstrip("/\\")
+    if ":" in candidate:  # e.g. a bare "C:" style remnant
+        candidate = candidate.rsplit(":", 1)[-1]
+    if candidate in ("", ".", ".."):
+        return ""
+    return candidate
 
 
 def _is_fits(name: str) -> bool:
@@ -175,23 +192,38 @@ class DataClient:
 
     @staticmethod
     def _coerce_item(item: Any) -> SubInfo | None:
-        """Turn a single listing entry (str or dict) into a SubInfo, or None."""
+        """Turn a single listing entry (str or dict) into a SubInfo, or None.
+
+        The device listing is UNTRUSTED. Both branches route the display name
+        through :func:`_safe_name`, so ``SubInfo.name`` can never contain a
+        directory separator or ``..`` component (it is the only value used to
+        build the *local* write path). ``sub.path`` is preserved verbatim
+        because it is used SOLELY to build the remote GET URL / SMB fetch path
+        -- it must never be used to construct a local filesystem write path.
+        Entries whose sanitized name is empty are dropped.
+        """
         if isinstance(item, str):
-            return SubInfo(name=_basename(item), path=item)
+            name = _safe_name(item)
+            if not name:
+                return None
+            return SubInfo(name=name, path=item)
         if isinstance(item, dict):
-            name = None
+            raw_name = None
             for key in _NAME_KEYS:
                 if item.get(key):
-                    name = str(item[key])
+                    raw_name = str(item[key])
                     break
             path = item.get("path")
             if path is None:
-                path = name
+                path = raw_name
             if path is None:
                 return None
             path = str(path)
-            if name is None:
-                name = _basename(path)
+            # Basename the untrusted name (dict branch matches the string
+            # branch); fall back to the basename of ``path`` when absent.
+            name = _safe_name(raw_name if raw_name is not None else path)
+            if not name:
+                return None
             size = item.get("size")
             return SubInfo(
                 name=name,
@@ -258,11 +290,26 @@ class DataClient:
                 "dest is required (DataClient was not built via from_settings)"
             )
         dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_root = dest_dir.resolve()
 
         results: list[dict] = []
         for sub in subs:
+            # Containment check (defense in depth): even though listing-derived
+            # names are basenamed at the source, a SubInfo may be constructed
+            # directly, so prove the resolved write path stays inside dest_dir
+            # BEFORE touching the network. Fail closed + audit on any escape.
+            local_path = (dest_dir / sub.name).resolve()
+            if not local_path.is_relative_to(dest_root):
+                self._log(
+                    tool="data.download.rejected",
+                    args={"name": sub.name},
+                    note="path traversal blocked",
+                )
+                raise ValueError(
+                    f"refusing to write outside data dir: {sub.name!r}"
+                )
+
             data, used, http_status = await self._fetch(sub, dest_dir, transport)
-            local_path = dest_dir / sub.name
             local_path.write_bytes(data)
             fits_hash = hash_fits(data)
             self._log(
