@@ -1,0 +1,302 @@
+"""Tests for seestar_mcp.data_client.
+
+Uses respx to mock the device's built-in HTTP file server (:80) and a mocked
+AlpacaClient (``unittest.mock.AsyncMock``) whose ``method_sync`` returns canned
+listing data. SMB is never actually contacted: the ``_download_smb`` helper (or
+``smbclient.open_file``) is monkeypatched. Because pytest is configured with
+``asyncio_mode=auto``, async tests need no decorator.
+"""
+
+from __future__ import annotations
+
+import json
+from unittest.mock import AsyncMock
+
+import httpx
+import pytest
+import respx
+
+from seestar_mcp.data_client import DataClient, SubInfo
+from seestar_mcp.provenance import ProvenanceLog, hash_fits
+
+HOST = "testscope"
+FITS_BYTES = b"SIMPLE  =                    T / fake fits\x00padding-bytes-here"
+
+
+def _make_client(**kwargs):
+    """Build a DataClient with an injected httpx client + AsyncMock alpaca."""
+    alpaca = AsyncMock()
+    http = httpx.AsyncClient(timeout=5.0)
+    client = DataClient(alpaca, host=HOST, http_client=http, **kwargs)
+    return client, alpaca, http
+
+
+# --- _parse_listing -------------------------------------------------------
+
+
+def test_parse_listing_list_of_strings():
+    client, _, _ = _make_client()
+    raw = [
+        "M31_sub/DSO_Stacked_1_M31_10s_20260704_2231.fit",
+        "M31_sub/preview.jpg",  # non-FITS, filtered out
+        "M31_sub/DSO_Stacked_2_M31_10s_20260704_2232.fits",
+    ]
+    subs = client._parse_listing(raw, None)
+    assert [s.name for s in subs] == [
+        "DSO_Stacked_1_M31_10s_20260704_2231.fit",
+        "DSO_Stacked_2_M31_10s_20260704_2232.fits",
+    ]
+    # target inferred from the "<Target>_sub" path segment.
+    assert all(s.target == "M31" for s in subs)
+    assert subs[0].path == "M31_sub/DSO_Stacked_1_M31_10s_20260704_2231.fit"
+
+
+def test_parse_listing_list_of_dicts():
+    client, _, _ = _make_client()
+    raw = [
+        {
+            "name": "DSO_Stacked_1_M31_10s.fit",
+            "path": "M31_sub/DSO_Stacked_1_M31_10s.fit",
+            "size": 12_582_912,
+        },
+        {"filename": "notes.txt", "path": "M31_sub/notes.txt"},  # non-FITS
+    ]
+    subs = client._parse_listing(raw, None)
+    assert len(subs) == 1
+    assert subs[0].name == "DSO_Stacked_1_M31_10s.fit"
+    assert subs[0].size == 12_582_912
+    assert subs[0].target == "M31"
+
+
+def test_parse_listing_dict_wrapping_a_list():
+    client, _, _ = _make_client()
+    for key in ("files", "list", "result"):
+        raw = {key: ["Tgt_sub/DSO_Stacked_1_Tgt_10s.fit"]}
+        subs = client._parse_listing(raw, None)
+        assert len(subs) == 1
+        assert subs[0].name == "DSO_Stacked_1_Tgt_10s.fit"
+        assert subs[0].target == "Tgt"
+
+
+def test_parse_listing_explicit_target_wins_over_inference():
+    client, _, _ = _make_client()
+    subs = client._parse_listing(["bare_file.fit"], "Andromeda")
+    assert len(subs) == 1
+    assert subs[0].target == "Andromeda"
+
+
+def test_parse_listing_garbage_returns_empty():
+    client, _, _ = _make_client()
+    assert client._parse_listing(None, None) == []
+    assert client._parse_listing({}, None) == []
+    assert client._parse_listing(12345, None) == []
+    assert client._parse_listing({"unknown": [1, 2, 3]}, None) == []
+
+
+# --- list_subs ------------------------------------------------------------
+
+
+async def test_list_subs_calls_method_sync_once_and_parses(tmp_path):
+    prov = ProvenanceLog(tmp_path / "prov.jsonl")
+    client, alpaca, _ = _make_client(provenance=prov, list_method="get_img_file_list")
+    alpaca.method_sync.return_value = [
+        "M31_sub/DSO_Stacked_1_M31_10s.fit",
+        "M31_sub/DSO_Stacked_2_M31_10s.fit",
+    ]
+    subs = await client.list_subs(target="M31")
+
+    alpaca.method_sync.assert_awaited_once()
+    call = alpaca.method_sync.await_args
+    assert call.args[0] == "get_img_file_list"
+    # params shape: [{"target": target}] when a target is given.
+    assert call.args[1] == [{"target": "M31"}]
+    assert len(subs) == 2
+
+    lines = (tmp_path / "prov.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    record = json.loads(lines[-1])
+    assert record["tool"] == "data.list_subs"
+    assert record["args"] == {"target": "M31", "count": 2}
+
+
+async def test_list_subs_no_target_sends_empty_params():
+    client, alpaca, _ = _make_client()
+    alpaca.method_sync.return_value = []
+    await client.list_subs()
+    call = alpaca.method_sync.await_args
+    assert call.args[1] == []
+
+
+async def test_list_subs_empty_or_garbage_returns_empty():
+    client, alpaca, _ = _make_client()
+    alpaca.method_sync.return_value = {"weird": "shape"}
+    subs = await client.list_subs()
+    assert subs == []
+
+
+# --- download_subs: HTTP --------------------------------------------------
+
+
+@respx.mock
+async def test_download_subs_http_success(tmp_path):
+    prov = ProvenanceLog(tmp_path / "prov.jsonl")
+    client, _, _ = _make_client(provenance=prov)
+    sub = SubInfo(
+        name="DSO_Stacked_1_M31_10s.fit",
+        path="M31_sub/DSO_Stacked_1_M31_10s.fit",
+        target="M31",
+    )
+    route = respx.get(
+        f"http://{HOST}:80/M31_sub/DSO_Stacked_1_M31_10s.fit"
+    ).mock(return_value=httpx.Response(200, content=FITS_BYTES))
+
+    results = await client.download_subs([sub], dest=tmp_path)
+    assert route.called
+    assert len(results) == 1
+    r = results[0]
+    assert r["transport"] == "http"
+    assert r["sha256"] == hash_fits(FITS_BYTES)
+    assert r["bytes"] == len(FITS_BYTES)
+
+    local = tmp_path / "DSO_Stacked_1_M31_10s.fit"
+    assert local.read_bytes() == FITS_BYTES
+    assert r["path"] == str(local)
+
+    lines = (tmp_path / "prov.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    record = json.loads(lines[-1])
+    assert record["tool"] == "data.download"
+    assert record["fits_hash"] == hash_fits(FITS_BYTES)
+    assert record["args"]["transport_used"] == "http"
+
+
+@respx.mock
+async def test_download_subs_http_failure_falls_back_to_smb(tmp_path, monkeypatch):
+    client, _, _ = _make_client()
+    sub = SubInfo(name="x.fit", path="M31_sub/x.fit", target="M31")
+    respx.get(f"http://{HOST}:80/M31_sub/x.fit").mock(
+        return_value=httpx.Response(500)
+    )
+
+    async def fake_smb(self, sub_arg, dest):
+        return FITS_BYTES
+
+    monkeypatch.setattr(DataClient, "_download_smb", fake_smb)
+
+    results = await client.download_subs([sub], dest=tmp_path)
+    assert results[0]["transport"] == "smb"
+    assert results[0]["sha256"] == hash_fits(FITS_BYTES)
+    assert (tmp_path / "x.fit").read_bytes() == FITS_BYTES
+
+
+@respx.mock
+async def test_download_subs_http_network_error_falls_back(tmp_path, monkeypatch):
+    client, _, _ = _make_client()
+    sub = SubInfo(name="x.fit", path="M31_sub/x.fit", target="M31")
+    respx.get(f"http://{HOST}:80/M31_sub/x.fit").mock(
+        side_effect=httpx.ConnectError("boom")
+    )
+
+    async def fake_smb(self, sub_arg, dest):
+        return FITS_BYTES
+
+    monkeypatch.setattr(DataClient, "_download_smb", fake_smb)
+    results = await client.download_subs([sub], dest=tmp_path)
+    assert results[0]["transport"] == "smb"
+
+
+async def test_download_subs_explicit_smb_bypasses_http(tmp_path, monkeypatch):
+    client, _, _ = _make_client()
+    sub = SubInfo(name="x.fit", path="M31_sub/x.fit", target="M31")
+
+    called = {"smb": False}
+
+    async def fake_smb(self, sub_arg, dest):
+        called["smb"] = True
+        return FITS_BYTES
+
+    monkeypatch.setattr(DataClient, "_download_smb", fake_smb)
+    # No respx mock at all: if HTTP were attempted it would raise.
+    results = await client.download_subs([sub], dest=tmp_path, transport="smb")
+    assert called["smb"] is True
+    assert results[0]["transport"] == "smb"
+    assert (tmp_path / "x.fit").read_bytes() == FITS_BYTES
+
+
+async def test_download_smb_helper_uses_smbclient_open_file(tmp_path, monkeypatch):
+    """Exercise the real _download_smb body with a fake smbclient.open_file."""
+    import smbclient
+
+    client, _, _ = _make_client()
+    sub = SubInfo(name="x.fit", path="M31_sub/x.fit", target="M31")
+
+    captured = {}
+
+    class _FakeFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return FITS_BYTES
+
+    def fake_open_file(path, mode="rb", **kwargs):
+        captured["path"] = path
+        captured["mode"] = mode
+        return _FakeFile()
+
+    monkeypatch.setattr(smbclient, "open_file", fake_open_file)
+    data = await client._download_smb(sub, tmp_path)
+    assert data == FITS_BYTES
+    # UNC path uses backslashes and the (firmware-dependent) share name.
+    assert captured["path"].startswith(rf"\\{HOST}")
+    assert "x.fit" in captured["path"]
+
+
+# --- lifecycle ------------------------------------------------------------
+
+
+async def test_aclose_closes_owned_but_not_injected_client():
+    # Injected client: must NOT be closed by DataClient.aclose().
+    injected = httpx.AsyncClient()
+    dc_injected = DataClient(AsyncMock(), host=HOST, http_client=injected)
+    await dc_injected.aclose()
+    assert injected.is_closed is False
+    await injected.aclose()
+
+    # Owned client: aclose() closes it.
+    dc_owned = DataClient(AsyncMock(), host=HOST)
+    owned = dc_owned._http
+    await dc_owned.aclose()
+    assert owned.is_closed is True
+
+
+async def test_context_manager_closes_owned_client():
+    async with DataClient(AsyncMock(), host=HOST) as dc:
+        owned = dc._http
+        assert owned.is_closed is False
+    assert owned.is_closed is True
+
+
+async def test_from_settings_defaults_dest_to_data_dir(tmp_path, monkeypatch):
+    from seestar_mcp.config import Settings
+
+    settings = Settings(seestar_host=HOST, data_dir=tmp_path / "data")
+    alpaca = AsyncMock()
+    dc = DataClient.from_settings(settings, alpaca)
+    sub = SubInfo(name="x.fit", path="M31_sub/x.fit", target="M31")
+
+    async def fake_smb(self, sub_arg, dest):
+        return FITS_BYTES
+
+    monkeypatch.setattr(DataClient, "_download_smb", fake_smb)
+    results = await dc.download_subs([sub], transport="smb")  # dest omitted
+    assert results[0]["path"] == str(tmp_path / "data" / "x.fit")
+    await dc.aclose()
+
+
+async def test_download_requires_dest_without_settings(tmp_path):
+    client, _, _ = _make_client()
+    sub = SubInfo(name="x.fit", path="M31_sub/x.fit", target="M31")
+    with pytest.raises(ValueError):
+        await client.download_subs([sub])  # no dest, not from_settings
