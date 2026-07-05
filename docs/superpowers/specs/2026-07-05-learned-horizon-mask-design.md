@@ -11,6 +11,8 @@
 
 Turn the horizon mask from *manually declared* into *learned-and-confirmed*: accumulate plate‑solve / frame‑rejection failures **binned by (azimuth, altitude) across nights**, and — only when the evidence is unambiguous — **suggest** horizon‑mask arcs for the user to confirm. Fixed obstructions (trees, roofline, power lines) are inferred from geometry + persistence; the system **never auto‑edits the mask**.
 
+A horizon mask is **only valid at the location where it was recorded** — trees at 92°/22° in the backyard mean nothing from a dark-sky site 50 km away. So every planning run must **re-check the scope's live GPS against the site profile and disclose a mismatch**, rather than silently applying a stale mask (see "Location awareness" below).
+
 ## The problem it must not get wrong
 
 A single cloud can blank one target, then another, in sequence — naive "blank frame → blocked" would falsely wall off good sky. Obstruction inference must be robust to that. Four discriminators (clouds cannot fake all four):
@@ -21,6 +23,20 @@ A single cloud can blank one target, then another, in sequence — naive "blank 
 4. **Altitude prior** — obstructions are low. Only bins below `max_obstruction_alt` (default 40°) are eligible; a blank at 70° is never a tree.
 
 Everything is a *suggestion the user approves*; nothing edits the mask automatically.
+
+## Location awareness (GPS-checked every plan)
+
+A mask is location-bound. Each planning tool (`plan_targets`, `assess_conditions`, `simulate_night`) and the obstruction learner must reconcile the **scope's live GPS** with the saved site profile:
+
+- `SiteProfile` gains `location_tolerance_km: float = 1.0` (additive field; backward compatible). The profile already stores `lat_deg`/`lon_deg` — those are the mask's home coordinates.
+- A helper `_current_gps(self) -> tuple[float, float] | None` reads the scope's GPS from `get_device_state` (best-effort; **`# FIRMWARE-DEPENDENT`** — isolate the key parse, like the battery helper). Returns `None` if unavailable.
+- A pure helper `location_status(profile, cur_lat, cur_lon) -> (match: bool, distance_km: float)` — great-circle (haversine) distance vs `profile.location_tolerance_km`.
+- **Behavior each plan:**
+  - GPS **within** tolerance → apply the horizon mask + learned obstructions normally.
+  - GPS **beyond** tolerance → **do NOT apply the stored horizon mask or learned obstructions** (they belong to another site). Return a prominent `location_warning` in the tool output, e.g. `"Scope is ~48 km from saved site 'Backyard' — horizon mask NOT applied. Set/confirm a profile for this location."` and plan on GPS + a default open horizon. This is the mandatory disclosure.
+  - GPS **unavailable** → apply the mask but include `"location: GPS unverified — assuming saved site 'Backyard'."` so the assumption is explicit.
+- Learned obstructions are location-scoped too: each `record_sky_result` stamps the observation's `lat`/`lon`; `suggest_obstructions` only aggregates records **within `location_tolerance_km` of the current/queried location**, so obstructions learned at home never surface (or get applied) at a different site.
+- Every planning tool's return includes a compact `location` block: `{matched: bool|None, distance_km, site_name, mask_applied: bool, warning?: str}` so the disclosure is always visible in the plan.
 
 ## Design principles (inherited)
 
@@ -101,7 +117,12 @@ run-session/anomaly-playbook: plate_solve outcome + current weather_go
 - `suggest_obstructions`: a low‑alt bin failing on 3 distinct clear nights (rate ≥ 0.7, isolated) → one candidate arc with `alt_min` at the bin ceiling; the same failures but weather‑excluded → NO candidate; a high‑alt (70°) persistent failure → NO candidate (altitude prior); a whole altitude ring failing (all az bins) → NO candidate (not isolated → weather/twilight); adjacent bad az bins merge into one arc.
 - tools: 33 registered; `log_sky_result` computes az/alt from a target when omitted (mock astro or use a real fixture date); `suggest_horizon_mask` returns candidates; `add_horizon_mask` appends to the profile and `get_site_profile` shows it. No‑site error path.
 - Skills: frontmatter valid; the new log/suggest steps referenced.
-- No network/hardware in tests (weather + astro mocked or fixture‑dated).
+- **Location awareness:** `location_status` haversine within/beyond tolerance is correct; a plan tool with the scope GPS **beyond** `location_tolerance_km` returns `location.mask_applied == False` + a `warning`, and the resulting plan does NOT drop mask-blocked targets (mask not applied); GPS **within** tolerance → `mask_applied == True` and blocked targets are dropped; GPS **unavailable** → `matched is None`, mask applied, "GPS unverified" note; `suggest_obstructions` excludes records from a far-away location.
+- No network/hardware in tests (weather + astro + GPS mocked or fixture‑dated).
+
+## Cross-cutting note
+
+The location check touches the existing planning tools (`plan_targets`, `assess_conditions`, `simulate_night`) — each gains the GPS reconcile + `location` block + conditional mask application. `is_blocked`/observability stay pure; the *decision to pass a mask-bearing vs mask-stripped site* is made at the tool layer based on the GPS match.
 
 ## Security / reproducibility
 
