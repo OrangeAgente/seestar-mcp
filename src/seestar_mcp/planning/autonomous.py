@@ -20,6 +20,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+# Seestar sub-exposure (seconds). Sub counts for an allocated slot are derived
+# from the slot's own length, not the target's full sweet-band capacity.
+EXPOSURE_S = 10
+
 
 @dataclass
 class ScheduledTarget:
@@ -120,7 +124,9 @@ def plan_night(
                 start_utc=start.isoformat().replace("+00:00", "Z"),
                 end_utc=end.isoformat().replace("+00:00", "Z"),
                 minutes=round(minutes, 1),
-                recommended_subs=int(target.get("recommended_subs", 0) or 0),
+                # Sub count for THIS slot's length (not the target's full
+                # sweet-band capacity, which the ranker's number reflects).
+                recommended_subs=int(minutes * 60 / EXPOSURE_S),
                 reason=(
                     f"Sweet-band window fits a {round(minutes)}-min slot "
                     f"before dawn"

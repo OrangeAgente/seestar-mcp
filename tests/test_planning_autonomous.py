@@ -31,6 +31,17 @@ def test_plan_night_min_slot_and_empty():
     assert plan_night(tiny, DW, min_slot_min=20.0) == []  # dropped: slot too short
 
 
+def test_plan_night_recommended_subs_match_slot_not_input():
+    # Input carries subs=300, but a 90-min slot at 10s must recompute to 540 —
+    # the schedule's sub count reflects the allocated slot, not the ranker's
+    # full sweet-band figure.
+    targets = [_t("A", "2026-07-05T02:00:00Z", "2026-07-05T03:30:00Z", subs=9999)]
+    sched = plan_night(targets, DW)
+    assert len(sched) == 1
+    assert sched[0].minutes == 90.0
+    assert sched[0].recommended_subs == 540  # 90 * 60 / 10, not 9999
+
+
 def test_guardrails_healthy_continues():
     v = evaluate_guardrails(
         now_utc="2026-07-05T04:00:00Z",
