@@ -37,6 +37,9 @@ class SiteProfile:
     # Upper field-rotation ceiling: above this, alt-az rotation degrades subs
     # (worst near the zenith). Sweet spot = [min_altitude_deg, this].
     field_rotation_ceiling_deg: float = 60.0
+    # How far the scope may sit from this site (haversine km) before the saved
+    # horizon mask is treated as stale and no longer applied (see location_status).
+    location_tolerance_km: float = 1.0
 
 
 def save_site(profile: SiteProfile, path: Path | None = None) -> Path:
