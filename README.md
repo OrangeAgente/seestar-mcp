@@ -88,9 +88,9 @@ The firmware-7.18+ RSA key and any tokens live in `./secrets/` (gitignored) or i
 `SEESTAR_SECRET_*` environment variables, loaded on demand by `secrets.py` and never written
 to config, source, or the provenance log.
 
-## Tools (23)
+## Tools (28)
 
-The server exposes exactly 23 single-purpose, least-privilege tools with honest,
+The server exposes exactly 28 single-purpose, least-privilege tools with honest,
 non-obfuscated descriptions. Destructive/motion tools are clearly labelled `SIDE EFFECT` in
 their descriptions; Skills gate them behind explicit user confirmation.
 
@@ -141,6 +141,20 @@ weather). Read-only except `set_site_profile`, which writes the site profile.
 | `get_target_observability` | Deep-dive one target → full observability (sweet-band time, transit, moon, framing) + recommended subs. Read-only. |
 | `plan_targets` | Ranked, reasoned target shortlist with best windows and recommended integration. Read-only. |
 
+### Projects / history
+
+Persistent projects/history store (`data/projects.json`, gitignored) so targets accumulate
+integration across nights toward goals, repeats are avoided, and the planner can answer
+"what needs more data?". Read-only except `set_project_goal` and `log_session_result`.
+
+| Tool | Description |
+|---|---|
+| `list_projects` | List all projects with collected/goal integration and status. Read-only. |
+| `get_project` | Return one project including its session history. Read-only. |
+| `set_project_goal` | Create/update a project and its integration goal (minutes). |
+| `log_session_result` | Record a completed session (integration, sub counts, median FWHM); accumulates toward the goal. |
+| `recommend_projects` | Active projects that still need data, most-needed first. Read-only. |
+
 ## Observing planner
 
 Set a site profile once (`set_site_profile` with your lat/lon and, if you know it,
@@ -151,6 +165,12 @@ separation, FOV framing) — every score is reason-tagged. With no profile, the 
 fall back to the scope's GPS and a default Bortle. Weather is the only external call
 (`api.open-meteo.com`, keyless) and a failure is non-fatal. The **`observing-planner`**
 skill drives this flow and hands the chosen target to `run-session`.
+
+The planner now also has **projects/history** (it boosts targets that still need data,
+suppresses recently-imaged ones, and can recommend what to shoot next) and **live-operator
+reactivity**: `run-session` consults the plan, watches conditions during a session, switches
+target when one leaves its sweet band, and logs each session's result back into its project
+at wind-down.
 
 ## Skills
 

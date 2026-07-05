@@ -39,6 +39,16 @@ tools. Follow the phases in order. Do not skip pre-flight. Treat every motion co
    frame rejection after ~15 min and a spiral border on the stack — this is expected,
    not a fault. EQ mode (wedge + polar align) avoids this.
 
+## Phase 0.5 — Consult the plan (before acquire)
+1. If the user asked to "image tonight" (or similar) **without naming a specific target**,
+   do not pick one here — defer target choice to the **`observing-planner`** skill. It
+   owns the conditions verdict (`assess_conditions`) and the ranked shortlist
+   (`plan_targets`). Come back with a chosen target before proceeding to Phase 1.
+2. Once a target is chosen (by the user or the planner), call `get_project(target)`. If a
+   project exists, state its progress in ONE line so the user knows what tonight adds:
+   `M31: 2.5 h of 6 h — adding more tonight.`
+   If no project exists, proceed silently — no need to announce the absence.
+
 ## Phase 1 — Acquire target
 1. Resolve the target to RA/Dec if the user gave a name (use known catalog coordinates;
    if uncertain, say so and ask). Pass JNow coordinates.
@@ -79,9 +89,23 @@ shows something marginal) to get real per-sub FWHM/eccentricity/SNR. Apply the
 qa-policy skill to interpret the numbers and decide keep/marginal/reject. Do not
 invent thresholds here — qa-policy owns them.
 
+### Live reactivity (runs alongside the `qa_tier1` loop)
+Alongside the fast Tier-1 polling, keep two slow watches. Keep every message here
+compact and phone-friendly — one line, lead with state.
+- **Conditions watch (slow cadence, ~every 10 min):** poll `assess_conditions`. If `go`
+  flips to False across **two consecutive** slow polls, route to the **`anomaly-playbook`**
+  skill (incoming clouds / weather no-go branch) — do not act on a single flip, and do not
+  diagnose weather inline.
+- **Sweet-band watch:** track where the current target sits in its window. When it leaves
+  its sweet band — crossing the field-rotation ceiling on the way down, or dropping toward
+  the altitude floor / into the horizon mask — tell the user in one line and offer the next
+  target from the plan (`plan_targets`), e.g.
+  `M27 past its sweet band (nearing floor). Next up: M31 (score 78). Slew?`
+  A slew to a new target is a motion command — ask first (see Hard rules / anomaly-playbook).
+
 Only interrupt the user proactively for: a fault the anomaly-playbook says needs a
-decision, a quality collapse, or a requested milestone (e.g. "ping me at 1 hour
-integration"). Otherwise let the session run quietly.
+decision, a quality collapse, a target leaving its sweet band, or a requested milestone
+(e.g. "ping me at 1 hour integration"). Otherwise let the session run quietly.
 
 ## Phase 5 — Wind down
 1. `stop_view("Stack")` to end stacking cleanly.
@@ -90,7 +114,15 @@ integration"). Otherwise let the session run quietly.
 3. Run `qa_session_report(target)` to produce the JSON+Markdown report and the keep-list.
    Summarize for the user: total integration, kept vs rejected counts, median FWHM,
    the dominant rejection cause if any, and where the report and keep-list were written.
-4. If the user is done for the night, `park` the mount (and `shutdown` only if they ask
+4. **Log the session to the project.** After `qa_session_report`, call
+   `log_session_result(target, integration_minutes, subs_total, subs_kept, median_fwhm?)`
+   so the project's integration accumulates across nights:
+   - `integration_minutes` = kept subs × exposure_s ÷ 60 (e.g. 150 × 10 s ÷ 60 = 25 min);
+   - `subs_total` / `subs_kept` come straight from the report's counts;
+   - `median_fwhm` is the report's median FWHM if present (omit if not).
+   Then state the updated project progress in one line:
+   `M31 logged: +25 min → 3.0 h of 6 h.`
+5. If the user is done for the night, `park` the mount (and `shutdown` only if they ask
    — shutdown ends the seestar_alp link).
 
 ## Hard rules
@@ -99,3 +131,5 @@ integration"). Otherwise let the session run quietly.
   signal, not a quality verdict.
 - Treat late-session Alt-Az rejection as expected; do not raise it as a fault.
 - Confirm each motion command's success before issuing the next.
+- At wind-down, always log the session to the project (`log_session_result`) so
+  integration accumulates toward the goal across nights.

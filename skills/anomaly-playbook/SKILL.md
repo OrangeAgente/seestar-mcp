@@ -43,6 +43,25 @@ tracking error.
   the dew heater (note it invalidates existing darks — re-enhancement needed). For wind,
   suggest waiting for a lull.
 
+## Symptom: incoming clouds / weather no-go
+Likely trigger: the run-session conditions watch reports `assess_conditions.go` flipping
+False, or cloud cover rising in the forecast, while a session is live.
+- **Corroborate before acting.** Do NOT abort on a single cloudy `qa_tier1` poll alone —
+  that is one frame's telemetry, not a trend. Confirm with `assess_conditions`: check that
+  `go` is False (or cloud clearly rising) and read the driving reason from its output
+  (cloud % / precip / dark-window). If the forecast still says `go: true`, treat a brief
+  star-count dip as the "stacking count flat" / transparency case above, not a weather abort.
+- If confirmed (`go` False / cloud rising): **PAUSE stacking** and alert the user with the
+  forecast reason in one line, e.g.
+  `Clouds moving in — forecast 80% cloud through 02:00 UTC. Pause and wait, or wind down?`
+- Offer the two choices plainly: **wait it out** (leave the session up; the firmware rejects
+  bad frames anyway, so accumulation simply stalls) vs **wind down** now.
+- On a **hard no-go** — precipitation, or a sustained no-go with no clearing in the dark
+  window — recommend winding down: stop the stack, run the Phase 5 wind-down (including
+  logging the session), and `park` the mount to get the optics horizontal.
+- Pausing, winding down, and parking are all state-changing — **always ask first**; never
+  auto-abort a session on weather.
+
 ## Symptom: plate-solve fails
 Likely causes: bad pointing; thick cloud/poor transparency; focus far off (no stars to
 solve).
