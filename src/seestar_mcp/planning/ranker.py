@@ -141,8 +141,10 @@ def _reasons(
         reasons.append(
             f"transit {obs.max_alt_deg:.0f}° — field rotation above ceiling"
         )
-
-    if obs.usable_sub_minutes * 60.0 < RECOMMENDED_EXPOSURE_S:
+        # Real-hardware finding: clean 10 s subs bank fine down to ~73° alt, so
+        # sub-trailing is only a genuine concern for near-zenith (above-ceiling)
+        # transits. Gate the trail note on that flag rather than the conservative
+        # smear threshold, which otherwise fires on nearly every target.
         reasons.append("subs trail near transit")
 
     reasons.append(

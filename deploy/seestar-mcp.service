@@ -43,11 +43,18 @@ SystemCallFilter=@system-service
 # --- least-privilege writable paths (ONLY the data/manifests dir) ---
 ReadWritePaths=/opt/seestar-mcp/data
 
-# --- egress allowlist: localhost + the Seestar ONLY ---
+# --- egress allowlist: localhost + the Seestar (+ weather when enabled) ---
 # Denies all outbound traffic, then re-allows loopback (seestar_alp :5555) and
 # the Seestar's LAN IP (native JSON-RPC :4700, HTTP :80, SMB :445). This unit
 # has NO reason to reach anything else; Remote Control's HTTPS is a different
 # process. Replace <SEESTAR_IP> with the device's fixed address.
+#
+# WEATHER: the observing planner makes ONE external call — HTTPS :443 to
+# api.open-meteo.com (keyless, no secret). If you enable weather, that host must
+# be reachable. IPAddressAllow pins IPs, not DNS names, and Open-Meteo's IPs
+# rotate, so you cannot cleanly IP-pin it here — either resolve-and-pin its
+# current addresses at deploy time, or relax this allowlist to permit :443
+# egress. It is the only allowed outbound weather destination.
 IPAddressDeny=any
 IPAddressAllow=localhost <SEESTAR_IP>
 
