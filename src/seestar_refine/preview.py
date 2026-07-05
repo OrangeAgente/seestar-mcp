@@ -316,6 +316,16 @@ def make_preview(
             "shape": list(arr.shape),
         }
 
+        # Trim the alt-az field-rotation border (black sheared parallelogram) to
+        # the largest clean data rectangle BEFORE color-balance/stretch. Default
+        # on; a full-valid image crops to itself (no visible change).
+        if bool(params.get("autocrop", True)):
+            from . import crop as _crop
+
+            arr, crop_bbox = _crop.autocrop(arr)
+            stats["crop_bbox"] = [int(v) for v in crop_bbox]
+            stats["cropped_shape"] = list(arr.shape)
+
         kwargs = {}
         if "black_point_sigma" in params:
             kwargs["black_point_sigma"] = float(params["black_point_sigma"])
