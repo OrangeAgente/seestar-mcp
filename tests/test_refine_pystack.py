@@ -138,10 +138,14 @@ def test_stack_reports_unavailable_backend(tmp_path, monkeypatch):
     assert "astroalign" in res.error.lower()
 
 
-def test_coverage_bbox_intersection():
-    from seestar_refine.pystack import _coverage_bbox
+def test_coverage_crop_masks_lowcov_and_trims():
+    from seestar_refine.pystack import _coverage_crop
 
-    cov = np.full((20, 20), 2, dtype="int32")  # partial coverage everywhere
-    cov[5:15, 4:16] = 10                         # full-coverage interior
-    box = _coverage_bbox(cov, kept=10, coverage_frac=0.98)
-    assert box == (5, 15, 4, 16)  # cropped exactly to the intersection
+    cov = np.full((20, 20), 2, dtype="int32")  # low coverage (streak border)
+    cov[5:15, 4:16] = 10                         # well-covered object region
+    master = np.ones((20, 20, 3), dtype="float64") * 7.0
+
+    cropped, box = _coverage_crop(master, cov, kept=10, coverage_frac=0.5)
+    assert box == [5, 15, 4, 16]        # trimmed to the covered bounding box
+    assert cropped.shape == (10, 12, 3)
+    assert bool(np.all(cropped == 7.0))  # object intact; low-cov blacked + trimmed

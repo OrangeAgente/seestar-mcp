@@ -199,21 +199,34 @@ def _load_raw(path: str) -> tuple[np.ndarray | None, str]:
         return None, ""
 
 
-def _coverage_bbox(
-    coverage: np.ndarray, kept: int, coverage_frac: float
-) -> tuple[int, int, int, int] | None:
-    """Largest rectangle where coverage >= ``coverage_frac * kept`` (intersection).
+def _coverage_crop(
+    master: np.ndarray, coverage: np.ndarray, kept: int, coverage_frac: float
+) -> tuple[np.ndarray, list[int]]:
+    """Black out low-coverage pixels, then trim to the covered bounding box.
 
-    Returns the ``(r0, r1, c0, c1)`` box of the biggest fully-covered rectangle,
-    or ``None`` if it cannot be computed (caller then skips the crop).
+    Pixels covered by fewer than ``coverage_frac * kept`` frames are the
+    field-rotation border / frame-edge artifacts; they are set to 0 (so an
+    aggressive stretch renders them black rather than lifting them into colored
+    streaks), and the result is trimmed to the bounding box of the covered
+    region. This keeps a large diagonal object (e.g. M31) whole — unlike an
+    inscribed-rectangle crop, which would slice its corners. Returns
+    ``(cropped_master, [r0, r1, c0, c1])``.
     """
     try:
-        from .crop import largest_inscribed_rectangle
-
         thr = max(1, int(np.ceil(float(coverage_frac) * max(1, kept))))
-        return largest_inscribed_rectangle(coverage >= thr)
-    except Exception:  # noqa: BLE001 - crop is best-effort; skip on failure
-        return None
+        covered = coverage >= thr
+        if not covered.any():
+            h, w = coverage.shape
+            return master, [0, h, 0, w]
+        out = np.where(covered[..., None], master, 0.0)
+        rows = np.where(covered.any(axis=1))[0]
+        cols = np.where(covered.any(axis=0))[0]
+        r0, r1 = int(rows[0]), int(rows[-1]) + 1
+        c0, c1 = int(cols[0]), int(cols[-1]) + 1
+        return out[r0:r1, c0:c1], [r0, r1, c0, c1]
+    except Exception:  # noqa: BLE001 - crop is best-effort; return input
+        h, w = coverage.shape
+        return master, [0, h, 0, w]
 
 
 def stack(
@@ -224,7 +237,7 @@ def stack(
     iters: int = 5,
     pattern: str | None = None,
     master_name: str | None = None,
-    coverage_frac: float = 0.98,
+    coverage_frac: float = 0.5,
 ) -> StackResult:
     """Stack a keep-list into a ``(3, H, W)`` master with the pure-Python backend.
 
@@ -296,13 +309,17 @@ def stack(
 
         master = integrate(mm[:kept], kappa=kappa, iters=iters)  # (H, W, 3)
 
-        # Intersection crop: keep only the region covered by (nearly) every frame,
-        # which excises the alt-az field-rotation border AND the coverage-step
-        # seams — the DSS "intersection mode" equivalent, done from the real map.
-        cov_bbox = _coverage_bbox(coverage, kept, coverage_frac)
-        if cov_bbox is not None:
-            r0, r1, c0, c1 = cov_bbox
-            master = master[r0:r1, c0:c1]
+        # Persist the coverage map (frames-per-pixel) so the crop threshold can be
+        # re-tuned later without re-registering.
+        try:
+            np.save(output_dir / f"{_slug(target)}_coverage.npy", coverage)
+        except Exception:  # noqa: BLE001 - sidecar is best-effort
+            pass
+
+        # Coverage crop: black out the low-coverage field-rotation border/edge
+        # artifacts and trim to the covered bounding box (keeps large diagonal
+        # objects whole; the DSS "intersection mode" idea, artifact-safe).
+        master, cov_bbox = _coverage_crop(master, coverage, kept, coverage_frac)
 
         cube = np.transpose(master, (2, 0, 1)).astype("float32")  # (3, H, W)
         master_path = output_dir / master_name
