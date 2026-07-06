@@ -107,8 +107,9 @@ def test_autocrop_mono_trims_black_border():
 def test_autocrop_no_border_is_noop():
     from seestar_refine.crop import autocrop
 
-    # A uniformly bright, borderless image: nothing exceeds the auto threshold
-    # (zero spread), so the mask is empty and the frame is returned unchanged.
+    # A uniformly bright, borderless image: every pixel clears the
+    # coverage-relative threshold (0.85 * median), so the whole frame is valid
+    # and the crop is the full frame minus the safety margin.
     img = np.full((24, 24, 3), 1000.0)
     cropped, box = autocrop(img, margin=2)
     r0, r1, c0, c1 = box
