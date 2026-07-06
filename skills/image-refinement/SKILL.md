@@ -6,9 +6,12 @@ description: >
   e.g. "stack my subs", "process the session", "refine the images", "make a final
   image", "create the final photo", "give me a finished picture of M27". Refines ONLY
   the QA keep-list (never rejected subs), stacks with DeepSkyStacker (default,
-  always-available → master + auto-stretched preview) or, if the user has PixInsight,
-  via WBPP + a hand-off to their external pixinsight-mcp for a quality-gated finish.
-  Runs on the seestar-refine MCP service; every external run is provenance-logged.
+  always-available → master + auto-stretched preview), the pure-Python pystack backend
+  (no external app), or, if the user has PixInsight, via WBPP + a hand-off to their
+  external pixinsight-mcp. A pure-Python post-processing pipeline (gradient removal,
+  color calibration, deconvolution, saturation, opt-in labeled AI upscale) is available
+  via preview params. Runs on the seestar-refine MCP service; every run is
+  provenance-logged.
 ---
 
 # Image Refinement
@@ -18,9 +21,12 @@ master → finished picture. It runs on the **`seestar-refine`** MCP service (se
 from `seestar-mcp`, on the processing/4090 host). Two backends, chosen by
 availability and the user's wishes:
 
-- **DeepSkyStacker (DSS)** — the default, always-available path. Registers +
-  integrates the keep-list into a master and an auto-stretched PNG preview. Complete
-  for DSS-only users.
+- **DeepSkyStacker (DSS)** — the default when configured. Registers + integrates the
+  keep-list into a master and an auto-stretched PNG preview. Complete for DSS users.
+- **pystack** — the pure-Python backend (`astroalign` + numpy). **No external app,
+  cross-platform**, and visually equivalent to DSS on Seestar data. Use `engine="pystack"`
+  when DSS isn't installed or on non-Windows hosts. Available whenever `astroalign`
+  imports (see `check_backends`).
 - **PixInsight** — the optional full finish (only if installed): stack via WBPP, then
   hand the master to the user's **external `pixinsight-mcp`** server for its
   quality-gated creative processing → a publication-ready image.
@@ -38,15 +44,17 @@ status for the long stacking run, then the result.
 2. **Call `check_backends`.** State plainly what's available on this host, e.g.:
    `Backends: DSS ready · PixInsight found · pixinsight-mcp bridge reachable.`
    `Backends: DSS ready · PixInsight not configured — DSS finish only.`
-   The report has `dss`, `pixinsight`, and `pixinsight_mcp` (the external bridge) plus
-   `notes` — quote it; do not assume a backend is present.
+   The report has `dss`, `pystack`, `pixinsight`, and `pixinsight_mcp` (the external
+   bridge) plus `notes` — quote it; do not assume a backend is present. If `dss` is
+   false but `pystack` is true, prefer `engine="pystack"` (no external app needed).
 
 ## Phase 1 — Stack
 
 1. Call **`stack_keep_list(target, engine=...)`**.
-2. **DSS is the default and always-available.** Use `engine="dss"` (or `"auto"`) unless
-   **both** PixInsight is available **and** the user has asked for the full PixInsight
-   finish — only then use `engine="wbpp"`.
+2. **Pick the engine by availability:** `engine="dss"`/`"auto"` when DSS is configured;
+   **`engine="pystack"`** (pure-Python, no external app) when DSS is absent or on a
+   non-Windows host — it's DSS-equivalent on Seestar data. Use `engine="wbpp"` only when
+   **both** PixInsight is available **and** the user asked for the full PixInsight finish.
 3. **State the engine and stacking params** in one line before/at kick-off, e.g.:
    `Stacking M27 · DSS · register + integrate, kappa-sigma rejection · 137 subs.`
    Seestar OSC subs are **pre-calibrated** (the scope builds/applies its own darks), so
@@ -58,14 +66,24 @@ status for the long stacking run, then the result.
 
 ## Phase 2 — Finish
 
-### DSS path (default)
+### DSS / pystack path (default)
 
-- A successful `stack_keep_list(dss)` already produced a **`preview_path`** (an
-  auto-stretched PNG) next to the master. **Present the PNG preview and say where the
-  master is** (`master_path`).
-- If the user wants a different look, offer **`stretch_master(master_path, params?)`**
-  with different `black_point_sigma` / `midtone` — regenerate the preview and show it.
-- That completes the DSS finish. Done.
+- A successful `stack_keep_list` already produced a **`preview_path`** (an auto-stretched
+  PNG) next to the master. **Present the PNG preview and say where the master is**
+  (`master_path`).
+- For a better look, offer **`stretch_master(master_path, params?)`** — the pure-Python
+  **AstroPipe** post-processing pipeline. All params are opt-in; chain what helps:
+  - `gradient: true` (+ `gradient_box`) — flatten LP/moon sky gradients (before stretch).
+  - `white_balance: true` — star-based color calibration (neutral star color).
+  - `black_point_sigma` / `midtone` / `white_percentile` — the stretch (percentile white
+    point; **raise the black point on noisy/low-SNR data** so the background clips to black).
+  - `saturation: 1.4–1.8` — boost OIII/Hα color to match references.
+  - `deconv: true` (+ `deconv_sigma` ~1.2, `deconv_iters` ~3–6) — **gentle** sharpening.
+    ⚠️ Aggressive settings ring around bright stars; keep it light.
+  - `upscale: 2` — opt-in resolution upscale; **Lanczos** by default (labeled "no new
+    detail"). Only use the AI path on explicit request — it is **provenance-labeled
+    "AI-generated detail, not captured signal."**
+- That completes the free finish. Done.
 
 ### PixInsight path (only if available)
 
