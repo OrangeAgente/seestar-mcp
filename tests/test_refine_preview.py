@@ -291,3 +291,23 @@ def test_make_preview_color_balance_reduces_green(tmp_path):
     rr, rg, rb = _png_channel_means(tmp_path / "raw.png")
     # Without balancing, green stays dominant.
     assert rg > max(rr, rb)
+
+
+def test_auto_stretch_percentile_white_reveals_faint_signal():
+    # A few saturated stars must NOT crush the stretch of a faint compact target.
+    # Percentile white (default) ignores the hot pixels; a max white point (100)
+    # maps the target to a fraction of the range and buries it.
+    import numpy as np
+
+    from seestar_refine.preview import auto_stretch
+
+    img = np.full((100, 100), 0.01, dtype="float64")
+    img[40:60, 40:60] = 0.12  # faint compact target (e.g. a small planetary)
+    img[0, 0] = img[0, 1] = img[1, 0] = 1.0  # a handful of saturated star pixels
+
+    hi = auto_stretch(img, white_percentile=99.7)   # ignores the hot pixels
+    lo = auto_stretch(img, white_percentile=100.0)   # max = star crushes the stretch
+    target_hi = float(hi[40:60, 40:60].mean())
+    target_lo = float(lo[40:60, 40:60].mean())
+    assert target_hi > target_lo + 30  # meaningfully brighter with percentile white
+    assert target_hi > 150             # and actually visible
