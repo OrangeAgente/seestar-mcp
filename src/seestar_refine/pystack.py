@@ -183,6 +183,32 @@ def _luminance(rgb: np.ndarray) -> np.ndarray:
     return np.asarray(rgb, dtype="float64") @ _LUM_W
 
 
+def _remove_cosmics(rgb: np.ndarray, *, sigclip: float = 4.5) -> np.ndarray:
+    """Clean cosmic rays / hot pixels per channel with L.A.Cosmic (astroscrappy).
+
+    Detects sharp single-pixel outliers via the Laplacian edge test and replaces
+    them with a local median. ``sigclip`` is the detection threshold (lower flags
+    more; 4.5 is the L.A.Cosmic default). Opt-in — the many-frame sigma-clipped
+    integrate already rejects most trails/hot pixels; this adds per-frame cleanup.
+    Never raises: on failure (incl. astroscrappy missing) the frame is unchanged.
+    """
+    try:
+        from astroscrappy import detect_cosmics
+
+        arr = np.asarray(rgb, dtype="float32")
+        if arr.ndim != 3 or arr.shape[-1] != 3:
+            return np.asarray(rgb)
+        out = arr.astype("float64").copy()
+        for c in range(3):
+            _, clean = detect_cosmics(
+                arr[..., c], sigclip=float(sigclip), objlim=5.0, niter=2
+            )
+            out[..., c] = clean
+        return out
+    except Exception:  # noqa: BLE001 - pure core, never raise on bad input
+        return np.asarray(rgb)
+
+
 def _synthetic_flat(
     rgb: np.ndarray, *, degree: int = 2, min_value: float = 0.2
 ) -> np.ndarray:
@@ -332,6 +358,7 @@ def stack(
     coverage_frac: float = 0.5,
     flatten_frames: bool = False,
     flat_correct: bool = True,
+    cosmic_ray: bool = False,
 ) -> StackResult:
     """Stack a keep-list into a ``(3, H, W)`` master with the pure-Python backend.
 
@@ -373,6 +400,8 @@ def stack(
             return _fail("reference sub could not be read")
         pat = pattern or ref_pat
         ref_rgb = debayer(ref_raw, pat)
+        if cosmic_ray:
+            ref_rgb = _remove_cosmics(ref_rgb)
         if flat_correct:
             ref_rgb = _synthetic_flat(ref_rgb)
         if flatten_frames:
@@ -394,6 +423,8 @@ def stack(
                 dropped += 1
                 continue
             rgb = debayer(raw, pat)
+            if cosmic_ray:
+                rgb = _remove_cosmics(rgb)
             if flat_correct:
                 rgb = _synthetic_flat(rgb)
             if flatten_frames:
