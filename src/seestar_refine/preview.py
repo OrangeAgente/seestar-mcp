@@ -266,6 +266,51 @@ def auto_stretch(
             return np.zeros((1,), dtype=np.uint8)
 
 
+def asinh_stretch(
+    data: np.ndarray,
+    *,
+    beta: float = 0.05,
+    black_point_sigma: float = 1.0,
+    white_percentile: float = 99.7,
+) -> np.ndarray:
+    """Color-preserving arcsinh (asinh) stretch — the galaxy/high-dynamic-range tool.
+
+    Stretches the *intensity* with ``asinh(norm/beta)/asinh(1/beta)`` (compresses
+    the bright core while lifting the faint disk), then scales each channel by the
+    same factor so color ratios are preserved — a bright golden core stays golden
+    instead of clipping to white. Smaller ``beta`` = stronger lift + more highlight
+    compression. Handles mono and ``(H, W, 3)``. Never raises.
+    """
+    try:
+        arr = np.asarray(data, dtype="float64")
+        color = arr.ndim == 3 and arr.shape[-1] in (3, 4)
+        intensity = np.nanmean(arr[..., :3], axis=-1) if color else np.squeeze(arr)
+        median, std = _sigma_clipped_stats(intensity)
+        black = median - black_point_sigma * std
+        finite = intensity[np.isfinite(intensity)]
+        white = float(np.percentile(finite, white_percentile)) if finite.size else 1.0
+        span = white - black
+        if not np.isfinite(span) or span <= 0:
+            span = 1.0
+        b = max(1e-4, float(beta))
+        denom = np.arcsinh(1.0 / b)
+
+        inten_n = np.clip((intensity - black) / span, 0.0, None)
+        stretched = np.clip(np.arcsinh(inten_n / b) / denom, 0.0, 1.0)
+        if color:
+            scale = stretched / np.maximum(inten_n, 1e-9)
+            chan = np.clip((arr[..., :3] - black) / span, 0.0, None)
+            out = np.clip(chan * scale[..., None], 0.0, 1.0)
+        else:
+            out = stretched
+        return np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    except Exception:  # noqa: BLE001 - pure core, never raise on bad input
+        try:
+            return np.zeros(np.asarray(data).shape, dtype=np.uint8)
+        except Exception:  # noqa: BLE001 - last-resort best effort
+            return np.zeros((1,), dtype=np.uint8)
+
+
 def _load_master_array(master_path: Path) -> np.ndarray:
     """Load a master (FITS via astropy, else Pillow) as a float array.
 
@@ -392,11 +437,19 @@ def make_preview(
 
         color_balance = bool(params.get("color_balance", True))
         is_color = arr.ndim == 3 and arr.shape[-1] == 3
+        use_asinh = str(params.get("stretch", "mtf")).lower() == "asinh"
         if is_color and color_balance:
             balanced = neutralize_background(arr)
             balanced = scnr_green(balanced)
-            linked = bool(params.get("linked", True))
-            stretched = auto_stretch(balanced, linked=linked, **kwargs)
+            if use_asinh:
+                akw = {k: v for k, v in kwargs.items() if k != "midtone"}
+                stretched = asinh_stretch(balanced, beta=float(params.get("asinh_beta", 0.05)), **akw)
+            else:
+                linked = bool(params.get("linked", True))
+                stretched = auto_stretch(balanced, linked=linked, **kwargs)
+        elif use_asinh:
+            akw = {k: v for k, v in kwargs.items() if k != "midtone"}
+            stretched = asinh_stretch(arr, beta=float(params.get("asinh_beta", 0.05)), **akw)
         else:
             stretched = auto_stretch(arr, **kwargs)
 

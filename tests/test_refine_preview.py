@@ -341,3 +341,20 @@ def test_make_preview_full_pipeline(tmp_path):
 
     im = Image.open(r["preview_path"])
     assert im.width == w * 2  # upscaled 2x (autocrop off)
+
+
+def test_asinh_stretch_compresses_core_preserves_color():
+    from seestar_refine.preview import asinh_stretch
+
+    img = np.full((16, 16, 3), [0.010, 0.009, 0.008])  # dark sky background
+    img[4:12, 4:12] = [0.045, 0.036, 0.027]            # faint golden disk over sky
+    img[8, 8] = [1.0, 0.7, 0.4]                        # bright golden core
+
+    out = asinh_stretch(img, beta=0.08, black_point_sigma=-0.5)
+    assert out.dtype == np.uint8
+    # faint disk lifted to clearly visible; sky stays dark (highlight-safe stretch)
+    assert out[6, 6].max() > 40
+    assert out[0, 0].max() < 30
+    # core stays warm (blue clearly below red), not a neutral white blob
+    core = out[8, 8]
+    assert int(core[2]) < int(core[0]) - 30
