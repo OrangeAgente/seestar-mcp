@@ -400,6 +400,15 @@ def make_preview(
         else:
             stretched = auto_stretch(arr, **kwargs)
 
+        # Denoise (opt-in), post-stretch, before saturation so chroma noise
+        # isn't amplified.
+        dn = float(params.get("denoise", 0.0))
+        if dn > 0 and stretched.ndim == 3:
+            from . import denoise as _denoise
+
+            stretched = _denoise.denoise(stretched, strength=dn)
+            stats["denoise"] = dn
+
         # Stage 6: saturation boost (opt-in; 1.0 = no change), post-stretch.
         sat = float(params.get("saturation", 1.0))
         if sat != 1.0 and stretched.ndim == 3:
