@@ -27,6 +27,7 @@ class Backends:
     dss: bool
     pixinsight: bool
     pixinsight_mcp: bool
+    pystack: bool
     notes: list[str]
 
 
@@ -76,9 +77,22 @@ def detect_backends(
             "pixinsight-mcp server for the full PixInsight finish."
         )
 
+    try:
+        from .pystack import astroalign_available
+
+        pystack = astroalign_available()
+    except Exception:  # noqa: BLE001 - any import failure => unavailable
+        pystack = False
+    if not pystack:
+        notes.append(
+            "pystack unavailable — astroalign not importable "
+            "(add the astroalign dependency)."
+        )
+
     return Backends(
         dss=dss,
         pixinsight=pixinsight,
         pixinsight_mcp=pixinsight_mcp,
+        pystack=pystack,
         notes=notes,
     )
