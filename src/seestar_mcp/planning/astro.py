@@ -21,6 +21,7 @@ Three public entry points:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from math import cos, radians
 
 import astropy.units as u
@@ -81,9 +82,24 @@ class Observability:
 
 
 def _to_time(when_utc: str | Time) -> Time:
-    """Coerce an ISO-UTC string or :class:`Time` to a scalar UTC :class:`Time`."""
+    """Coerce an ISO-UTC string or :class:`Time` to a scalar UTC :class:`Time`.
+
+    Tolerates an ISO timezone offset (``+00:00`` / ``Z`` / any ``±HH:MM``) —
+    ``datetime.now(timezone.utc).isoformat()`` emits ``+00:00``, which astropy's
+    ``Time`` parser rejects, so callers passing a real-clock "now" (``date=None``)
+    would otherwise crash. Any offset is converted to true UTC and dropped before
+    handing an offset-free ISO string to astropy.
+    """
     if isinstance(when_utc, Time):
         return when_utc
+    if isinstance(when_utc, str):
+        try:
+            dt = datetime.fromisoformat(when_utc.strip().replace("Z", "+00:00"))
+        except ValueError:
+            dt = None
+        if dt is not None and dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return Time(dt.isoformat(), scale="utc")
     return Time(when_utc, scale="utc")
 
 

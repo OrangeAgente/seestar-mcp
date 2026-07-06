@@ -6,6 +6,7 @@ All calls take an explicit ``when_utc`` so the results are reproducible.
 """
 
 from seestar_mcp.planning.astro import (
+    _to_time,
     azalt_at,
     dark_window,
     field_rotation_rate,
@@ -14,6 +15,22 @@ from seestar_mcp.planning.astro import (
 )
 from seestar_mcp.planning.catalog import find_target
 from seestar_mcp.planning.site import SiteProfile
+
+
+def test_to_time_accepts_offset_suffixed_iso():
+    # datetime.now(timezone.utc).isoformat() yields '...+00:00' with microseconds,
+    # which the controller passes to the planner whenever date=None. astropy's
+    # Time() rejects the offset, so this must be normalized, not passed through raw.
+    a = _to_time("2026-07-06T01:37:39.165314+00:00")
+    b = _to_time("2026-07-06T01:37:39.165314")
+    assert abs((a - b).sec) < 1e-6
+    # 'Z' must still work, and a non-zero offset must be converted to real UTC.
+    assert abs((_to_time("2026-07-06T01:37:39Z") - _to_time("2026-07-06T01:37:39")).sec) < 1e-6
+    assert abs((_to_time("2026-07-06T06:37:39+05:00") - _to_time("2026-07-06T01:37:39")).sec) < 1e-6
+    # The real crash path: an offset-suffixed 'now' flowing through dark_window.
+    site = SiteProfile(name="x", lat_deg=45.42, lon_deg=-75.70)
+    dusk, dawn = dark_window(site, "2026-07-06T01:37:39.165314+00:00")
+    assert dusk < dawn
 
 
 def test_field_rotation_formula_hand_check():
