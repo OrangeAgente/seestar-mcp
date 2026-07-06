@@ -23,7 +23,7 @@ from mcp.server.fastmcp import FastMCP
 
 from seestar_mcp.provenance import ProvenanceLog
 
-from . import dss, wbpp
+from . import dss, pystack, wbpp
 from .backends import detect_backends
 from .config import RefineSettings, get_settings
 from .handoff import to_xisf, write_pixinsight_config
@@ -119,8 +119,9 @@ class RefineController:
         """Stack a target's QA keep-list into a master via the chosen engine.
 
         ``engine``: ``"dss"``/``"auto"`` route to DeepSkyStacker (the default,
-        always-available path); ``"wbpp"`` routes to the PixInsight WBPP runner
-        (best-effort, requires PixInsight — the skill decides when to use it).
+        always-available path); ``"pystack"`` routes to the pure-Python backend
+        (astroalign + numpy — no external app); ``"wbpp"`` routes to the
+        PixInsight WBPP runner (requires PixInsight — the skill decides when).
         Resolves the keep-list (newest QA report, else a per-target glob), runs
         the stack, and provenance-logs the external invocation. Never raises.
         """
@@ -164,8 +165,11 @@ class RefineController:
                     "error": result.error,
                 }
 
-            # "dss" or "auto" -> DeepSkyStacker (WBPP is opt-in via engine).
-            result = dss.stack(keep_list, self.settings)
+            # "dss"/"auto" -> DeepSkyStacker; "pystack" -> pure-Python backend.
+            if engine == "pystack":
+                result = pystack.stack(keep_list, self.settings)
+            else:
+                result = dss.stack(keep_list, self.settings)
 
             # Best-effort auto-preview: on a successful stack with a master,
             # write a stretched PNG next to it. A preview failure must NEVER
@@ -347,8 +351,9 @@ async def stack_keep_list(target: str, engine: str = "auto") -> dict:
     SIDE EFFECT: runs a LONG external stacking process (DeepSkyStacker) and WRITES
     files (a DSS file list + the integrated master) under the configured output
     dir. Refines ONLY the keep-list (never rejected subs). ``engine``: ``"dss"``
-    or ``"auto"`` use DeepSkyStacker (default/always-available); ``"wbpp"``
-    (PixInsight) is not available until a later task. Returns the master path +
+    or ``"auto"`` use DeepSkyStacker (default/always-available); ``"pystack"``
+    uses the pure-Python backend (astroalign + numpy, no external app); ``"wbpp"``
+    (PixInsight) requires PixInsight. Returns the master path +
     basic stats, or a structured error (e.g. DSS not configured). The external
     invocation is provenance-logged.
     """

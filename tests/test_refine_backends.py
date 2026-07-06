@@ -41,3 +41,15 @@ def test_pixinsight_and_bridge(tmp_path):
     assert b.pixinsight is True
     assert b.pixinsight_mcp is True
     assert b.dss is False
+
+
+def test_detect_backends_reports_pystack(tmp_path):
+    # astroalign is a project dependency, so pystack is available in-env.
+    from seestar_refine.backends import detect_backends
+    from seestar_refine.config import RefineSettings
+
+    b = detect_backends(
+        RefineSettings(_env_file=None, dss_cli="", pixinsight_exe=""),
+        bridge_dir=tmp_path / "nope",
+    )
+    assert b.pystack is True
