@@ -113,18 +113,19 @@ def run_dss(
 ) -> dict:
     """Invoke ``DeepSkyStackerCL`` on a file list and locate the master.
 
-    Builds ``[dss_cli, "/L", file_list_path, ...]`` and calls ``runner`` with
-    ``capture_output=True, text=True, timeout=timeout_s``. ``runner`` defaults to
-    :func:`subprocess.run` and is injected in tests (the real DSS never runs in
-    CI). On return code 0, the newest master under ``output_dir`` is located.
+    Builds ``[dss_cli, "/r", "/S", "/FITS", "/O:<master>", file_list_path]`` (the
+    file list is the POSITIONAL final argument — there is no ``/L`` flag) and
+    calls ``runner`` with ``capture_output=True, text=True, timeout=timeout_s``.
+    ``runner`` defaults to :func:`subprocess.run` and is injected in tests (the
+    real DSS never runs in CI). On return code 0, the master at the explicit
+    ``/O:`` path is used, falling back to the newest master under ``output_dir``.
 
     Returns ``{"ok", "master_path", "log", "returncode", "error"}``. Never raises:
     a non-zero exit, a timeout, a missing master, or any exception all map to a
     structured ``ok: False`` result.
 
-    FORMAT-DEPENDENT: the ``/L`` file-list flag plus the register+integrate /
-    autosave flags below are a best-effort encoding of the ``DeepSkyStackerCL``
-    interface and must be confirmed against the installed DSS.
+    The command below is VALIDATED against DeepSkyStacker 6.2.1 (see the inline
+    note); confirm the flags if you target a different DSS build.
     """
     output_dir = Path(output_dir)
     master_out = output_dir / master_name
