@@ -372,8 +372,15 @@ def make_preview(
 
             d_sigma = float(params.get("deconv_sigma", 1.5))
             d_iters = int(params.get("deconv_iters", 10))
-            arr = _deconv.deconvolve(arr, psf_sigma=d_sigma, iterations=d_iters)
-            stats["deconv"] = {"psf_sigma": d_sigma, "iterations": d_iters}
+            d_protect = bool(params.get("deconv_protect_stars", True))
+            arr = _deconv.deconvolve(
+                arr, psf_sigma=d_sigma, iterations=d_iters, protect_stars=d_protect
+            )
+            stats["deconv"] = {
+                "psf_sigma": d_sigma,
+                "iterations": d_iters,
+                "protect_stars": d_protect,
+            }
 
         kwargs = {}
         if "black_point_sigma" in params:
