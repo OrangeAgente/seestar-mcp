@@ -269,10 +269,14 @@ PixInsight are installed). It takes the QA **keep-list** (from `qa_session_repor
 turns it into a finished image. It is a distinct concern with external desktop-app
 dependencies, so it is its own FastMCP server, registered separately from `seestar-mcp`.
 
-Two backends, chosen by availability and the user's wish:
+Three stacking backends, chosen by availability and the user's wish:
 
-- **DeepSkyStacker (DSS)** — the **always-available** path: registers + integrates the
-  keep-list into a master and an auto-stretched PNG preview. Complete on its own.
+- **DeepSkyStacker (DSS)** — registers + integrates the keep-list into a master and an
+  auto-stretched PNG preview. Complete on its own (when DSS is installed).
+- **pystack** — a **pure-Python, DSS-free** backend (`astroalign` + numpy): debayer →
+  star-triangle registration → memmap-bounded sigma-clipped integration → `(3,H,W)`
+  master. **Cross-platform, no external app, and visually equivalent to DSS** on Seestar
+  data (validated on 286 real M27 subs). Use `engine="pystack"`.
 - **PixInsight** — the **optional full finish** (only if installed): stack via WBPP,
   then hand the master to the user's **external
   [`pixinsight-mcp`](https://github.com/aescaffre/pixinsight-mcp)** server for its
@@ -310,16 +314,34 @@ missing/empty path simply means that backend is unavailable (`check_backends` re
 
 | Tool | Description |
 |---|---|
-| `check_backends` | Report which backends are available: DSS CLI, PixInsight, and the external `pixinsight-mcp` bridge. Read-only. |
-| `stack_keep_list` | Stack a target's QA keep-list into a master. `engine`: `dss`/`auto` (default, always) or `wbpp` (PixInsight, if available). SIDE EFFECT: long external process + writes files. |
-| `stretch_master` | Auto-stretch a master into an 8-bit PNG preview; return the path + stats. |
+| `check_backends` | Report which backends are available: DSS CLI, **pystack** (astroalign), PixInsight, and the external `pixinsight-mcp` bridge. Read-only. |
+| `stack_keep_list` | Stack a target's QA keep-list into a master. `engine`: `dss`/`auto`, **`pystack`** (pure-Python, no external app), or `wbpp` (PixInsight, if available). SIDE EFFECT: long process + writes files. |
+| `stretch_master` | Auto-stretch a master into an 8-bit PNG preview via the AstroPipe pipeline (opt-in `params`: `gradient`, `white_balance`, `deconv`, `saturation`, `upscale`, plus stretch controls); return the path + stats. |
 | `prepare_pixinsight_handoff` | Write the `pixinsight-mcp` JSON config (+ an XISF copy if `xisf` is installed) for the external server's creative finish. Does NOT run PixInsight. |
 | `list_masters` | List masters/previews produced under the output dir. Read-only. |
 
-DSS gives an always-available **master + preview**; PixInsight is an **optional full
-finish** and the creative processing itself is done by the user's external
-`pixinsight-mcp`, not by this service. The **`image-refinement`** skill orchestrates the
-flow (keep-list only, backend + params stated, DSS fallback if PixInsight is unreachable).
+DSS gives a **master + preview**; PixInsight is an **optional full finish** done by the
+user's external `pixinsight-mcp`. The **`image-refinement`** skill orchestrates the flow
+(keep-list only, backend + params stated, fallback if a backend is unreachable).
+
+### AstroPipe — the pure-Python pipeline (no DSS/PixInsight required)
+
+A DSS/PixInsight-free path built on the scientific-Python stack, exposed through
+`stack_keep_list(engine="pystack")` + `stretch_master(params=…)`:
+
+1. **Stack** (`pystack`) — debayer (GRBG) → `astroalign` registration → memmap-bounded
+   sigma-clipped integration → `(3,H,W)` master. Validated visually equivalent to DSS.
+2. **Gradient removal** — star-masked `photutils.Background2D` sky subtraction.
+3. **Color calibration** — star-based white balance (neutral star color).
+4. **Stretch** — percentile-white-point MTF (raise the black point on low-SNR data).
+5. **Deconvolution** — gentle Richardson-Lucy (honest detail recovery; keep it light —
+   aggressive settings ring around bright stars).
+6. **Saturation** — chroma boost to match references.
+7. **Upscale** *(opt-in)* — Lanczos by default ("no new detail"); an optional AI path is
+   **provenance-labeled "AI-generated detail, not captured signal."**
+
+Every stage is opt-in via `stretch_master` params and provenance-logged. The whole thing
+runs cross-platform with no external desktop app.
 
 ## Skills
 
