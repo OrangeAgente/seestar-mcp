@@ -34,6 +34,7 @@ dependencies = [
   "ccdproc==2.5.1",
   "smbprotocol==1.16.1",
   "pillow==12.3.0",
+  "astroalign==2.6.2",
 ]
 
 [project.urls]
