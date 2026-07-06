@@ -1,0 +1,72 @@
+SeeStar-AI (seestar-mcp)
+Copyright (c) 2026 Joshua Gillmore
+Licensed under the MIT License (see LICENSE).
+
+================================================================================
+Trademarks / non-affiliation
+================================================================================
+
+"Seestar" and "ZWO" are trademarks of Suzhou ZWO Co., Ltd. This project is
+unofficial and is NOT affiliated with, authorized, sponsored, or endorsed by
+ZWO. Those names are used here only to identify the hardware this software
+interoperates with. All other product names, logos, and brands are the property
+of their respective owners.
+
+================================================================================
+Interoperability and the firmware authentication key (17 U.S.C. § 1201(f))
+================================================================================
+
+Seestar firmware 7.18+ requires an RSA challenge-response handshake to accept
+commands. This project:
+
+  * ships NO ZWO firmware, NO ZWO application code, and NO interoperability key;
+  * contains NO tool that extracts, derives, or circumvents any key; and
+  * does not perform the handshake itself — it drives the external `seestar_alp`
+    service, which owns the handshake.
+
+To operate against real 7.18+ hardware, the USER supplies their own key file
+(e.g. `seestar_client_key.pem`), extracted by the user from their own lawfully
+licensed copy of the ZWO application for the sole purpose of interoperability,
+as permitted under the reverse-engineering provision of 17 U.S.C. § 1201(f)
+(and analogous provisions elsewhere). That key is a user-supplied secret; it
+lives only in the gitignored `secrets/` directory or a `SEESTAR_SECRET_*`
+environment variable and is never committed. Users are responsible for
+compliance with the laws of their own jurisdiction.
+
+================================================================================
+Third-party software this project drives but does NOT vendor or distribute
+================================================================================
+
+This repository invokes the following software as separate, user-installed
+programs (over a network API or as a subprocess). None of it is bundled,
+vendored, statically or dynamically linked into, or redistributed by this
+project; each remains under its own license and must be obtained by the user
+from its own source.
+
+  * seestar_alp — https://github.com/smart-underworld/seestar_alp
+      Primarily GPL-3.0 (with MIT/BSD-3-Clause components). Driven ONLY as a
+      separate process over its local ASCOM Alpaca HTTP API (127.0.0.1:5555);
+      no seestar_alp source is included or linked here. Operators should pin it
+      to a reviewed release.
+
+  * pixinsight-mcp — https://github.com/aescaffre/pixinsight-mcp
+      MIT. The optional PixInsight finish hands off to this external server,
+      which is the user's own install (macOS-tested; Windows unverified).
+
+  * DeepSkyStacker — https://deepskystacker.free.fr
+      Freeware (not open source). Driven via its command-line executable
+      (`DeepSkyStackerCL`); not bundled or redistributed.
+
+  * PixInsight — https://pixinsight.com
+      Commercial software, separately licensed by the user; only invoked if the
+      user has installed it.
+
+================================================================================
+Bundled Python dependencies
+================================================================================
+
+All runtime dependencies (pinned in pyproject.toml / uv.lock) are under
+permissive licenses (BSD-3-Clause / MIT / HPND): astropy, photutils, ccdproc,
+numpy, pillow, mcp, pydantic, pydantic-settings, httpx, smbprotocol. No
+copyleft (GPL/LGPL/AGPL) code is included in or distributed with this project.
+Run `make sbom` to regenerate the CycloneDX inventory (sbom.json).

@@ -90,8 +90,8 @@ repo drives it if reachable but does not vendor, host, or hold credentials for i
 |---|---|
 | **Tool poisoning** (hidden instructions in tool descriptions/schemas) | Tool descriptions are honest, human-readable, and non-obfuscated (see `server.py`); side effects are labelled `SIDE EFFECT` in plain English. Tools are statically defined in pinned code — **no dynamic/remote tool definitions**, no description mutation at runtime. |
 | **Prompt injection via tool output** | Device telemetry and FITS data are treated as **data, not instructions**: tools return structured `dict`s, never executable text. The Skills explicitly instruct not to act on instructions embedded in device/FITS output. Every tool call and its result is recorded to the provenance log for after-the-fact review. |
-| **Over-permissioned tools** | 23 single-purpose, least-privilege tools — each does exactly one thing. Motion/destructive tools (`goto_target`, `run_autofocus`, `set_filter`, `set_dew_heater`, `park`, `shutdown`, `download_subs`, `qa_session_report`) are clearly labelled, and the `run-session` / `anomaly-playbook` Skills gate motion and destructive operations behind **explicit user confirmation**. |
-| **Supply chain** (rug-pulls / typosquats / drift) | Exact version pins in `pyproject.toml` and a **hash-locked `uv.lock`** (committed). An SBOM is generated via CycloneDX (`make sbom`), and a non-blocking `mcp-scan` check (`make scan`) watches for tool-poisoning / supply-chain findings. `seestar_alp` is vendored/pinned at a reviewed commit rather than tracking `main`. |
+| **Over-permissioned tools** | 33 single-purpose, least-privilege tools on `seestar-mcp` (plus 5 on the separate `seestar-refine` service) — each does exactly one thing. Motion/destructive tools (`goto_target`, `run_autofocus`, `set_filter`, `set_dew_heater`, `park`, `shutdown`, `download_subs`, `qa_session_report`) are clearly labelled, and the `run-session` / `anomaly-playbook` Skills gate motion and destructive operations behind **explicit user confirmation**. |
+| **Supply chain** (rug-pulls / typosquats / drift) | Exact version pins in `pyproject.toml` and a **hash-locked `uv.lock`** (committed). An SBOM is generated via CycloneDX (`make sbom`), and a non-blocking `mcp-scan` check (`make scan`) watches for tool-poisoning / supply-chain findings. `seestar_alp` is **not** vendored — it is an external, operator-installed service this server drives over its local Alpaca HTTP API; operators should pin it to a reviewed release (it is primarily GPL-3.0 and is never bundled, linked, or redistributed here — see `NOTICE`). |
 | **Prompt injection / insufficient sandboxing** | The daemon runs under a hardened systemd unit (`deploy/seestar-mcp.service`): a dedicated **unprivileged** user, `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`, `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, `RestrictNamespaces`, `LockPersonality`, `MemoryDenyWriteExecute`, `SystemCallFilter=@system-service`, and `ReadWritePaths` limited to the data/manifests dir. |
 | **SSRF** (server tricked into fetching arbitrary URLs) | `data_client` only fetches from the **configured `seestar_host` on fixed ports** (:80 HTTP / :445 SMB) — there are **no user-controlled URLs**. The **one** external planning call is weather: the observing planner fetches `https://api.open-meteo.com` (HTTPS :443) with a **fixed URL and only lat/lon params** — no user-controlled host and **no secret / API key** (Open-Meteo is keyless). The systemd unit adds an IP egress allowlist (`IPAddressDeny=any` + `IPAddressAllow=localhost <SEESTAR_IP>`) so even a bug cannot reach anything but the Seestar and localhost; **when weather is enabled, add `api.open-meteo.com` (:443) to the allowed destinations.** Note `IPAddressAllow` pins IPs, not DNS names, so a DNS-named host like `api.open-meteo.com` cannot be IP-pinned reliably (its addresses rotate) — document it as the single allowed outbound weather destination, or resolve-and-pin at deploy time. A weather failure is non-fatal (the planner falls back to `go=None`, offline observability). |
 | **Insecure updates** (firmware-fragile auth) | The firmware-7.18+ RSA handshake is isolated to `secrets.py` and single `# FIRMWARE-DEPENDENT` constants, so a firmware bump is a one-line key/constant swap in one place, not a code change. Dependencies are pinned; the auth/command map is the single updatable point. |
@@ -129,8 +129,37 @@ make scan       # NON-BLOCKING mcp-scan supply-chain / tool-poisoning check
   — so recovering from a firmware bump is a one-line key/constant swap, never a code change.
   Today `seestar_alp` owns the :4700 handshake, so this server does not hold the key at all.
 
+## Data access: the SMB / filesystem backend (host-wide caveat)
+
+The optional filesystem backend (`SEESTAR_SEESTAR_IMAGE_ROOT`) reads subs directly off the
+Seestar's SMB share via the OS redirector (a UNC path). The Seestar exposes that share as an
+**unauthenticated guest with SMB signing**, which modern Windows refuses by default. Making
+it reachable requires, on the client, an **elevated, machine-wide** relaxation:
+
+```powershell
+Set-SmbClientConfiguration -EnableInsecureGuestLogons $true   # revert with $false
+```
+
+**This is a real, host-wide security downgrade.** It re-enables unauthenticated, unsigned
+SMB2/3 guest logons for the *whole machine*, exposing it to rogue-server / man-in-the-middle
+file delivery from anything on the LAN — not just the Seestar. Treat it as opt-in and scoped:
+
+- Prefer the **HTTP transport** (`download_subs` default) or a manual copy, which need **no**
+  such change; only enable the guest relaxation if you specifically want the hands-free fs
+  backend.
+- If you do enable it, keep the Seestar on an **isolated IoT VLAN**, and **revert**
+  (`... $false`) when you are done pulling data.
+- The backend itself is still contained: listing names are basenamed and every write is
+  fail-closed to the destination root (see the path-traversal control above); the risk is the
+  OS-level SMB setting, not this code.
+
 ## Reporting
 
-This is a private, high-assurance build. Security concerns should be raised directly to the
-project owner. Any change that touches the auth path, the tool descriptions, the dependency
-set, or the provenance/redaction logic must be reviewed against this document.
+To report a security issue, please use **GitHub → the repository's Security tab → "Report a
+vulnerability"** (private advisories), or email the maintainer at
+**joshuagillmore@gmail.com** with `SECURITY` in the subject. Please do **not** open a public
+issue for a vulnerability. Expect an initial acknowledgement within about a week; please allow
+a reasonable window to develop and ship a fix before any public disclosure.
+
+Any change that touches the auth path, the tool descriptions, the dependency set, or the
+provenance/redaction logic must be reviewed against this document.

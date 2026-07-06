@@ -11,6 +11,38 @@ least-privilege. It is designed to run 24/7 on an **NVIDIA Jetson** host and is 
 the **Claude phone app via Claude Code Remote Control** — the Jetson is the brain; the phone
 is just a window into the local session.
 
+## Status & limitations
+
+**Alpha (0.1.0).** The core has been exercised against real hardware — a full live M27
+session end-to-end (goto → autofocus → plate-solve → stack → park) and a 766-sub M31 deep
+stack through DeepSkyStacker — but several code paths are **not yet hardware-validated** and
+are flagged `# FIRMWARE-DEPENDENT` in the source (single, well-marked update points):
+
+- the GPS key in `_parse_gps` and the battery key in `_parse_device_health`;
+- the on-device sub-listing method (`get_img_file_list`) used by `list_subs`;
+- the PixInsight/WBPP refinement path on Windows (the external `pixinsight-mcp` is
+  macOS-tested; the DSS path is the validated default).
+
+Firmware changes are the expected breakage vector; these constants are isolated so a bump is
+a one-line swap. Treat unvalidated paths as needing a first-light check against your own
+scope. The field-rotation **autocrop** is a brightness heuristic and cannot pixel-perfectly
+excise the sheared border on a smooth sky (a coverage-map crop is a future enhancement).
+
+## Prerequisites
+
+- **[`seestar_alp`](https://github.com/smart-underworld/seestar_alp)** running and reachable
+  at `http://127.0.0.1:5555` (it owns the device handshake; GPL-3.0, installed separately).
+- A **user-supplied firmware interop key** for Seestar firmware 7.18+ (you extract it from
+  your own licensed ZWO app under 17 U.S.C. §1201(f); this project ships none — see
+  [Legal & trademarks](#legal--trademarks)).
+- **[DeepSkyStacker](https://deepskystacker.free.fr)** (`DeepSkyStackerCL`) on the processing
+  host for the `seestar-refine` service.
+- *Optional:* **PixInsight** + the external
+  **[`pixinsight-mcp`](https://github.com/aescaffre/pixinsight-mcp)** for the full-finish path.
+- *Optional (hands-free data pull):* the SMB/filesystem backend requires a **machine-wide
+  Windows SMB relaxation** — see the caveat under [Configuration](#configuration) and
+  [`SECURITY.md`](SECURITY.md#data-access-the-smb--filesystem-backend-host-wide-caveat).
+
 ## Operating model — Remote Control
 
 The phone never touches your LAN. It reaches the local Claude Code session only through
@@ -55,7 +87,7 @@ claude mcp add seestar-mcp -- uv --directory /path/to/SeeStar-AI run python -m s
 On the Windows development machine, use the repo path here instead:
 
 ```bash
-claude mcp add seestar-mcp -- uv --directory C:/Users/<user>/SeeStar-AI run python -m seestar_mcp.server
+claude mcp add seestar-mcp -- uv --directory C:/path/to/SeeStar-AI run python -m seestar_mcp.server
 ```
 
 ## Install / dev
@@ -101,6 +133,16 @@ to config, source, or the provenance log.
 QA thresholds (all `SEESTAR_QA_*`, see `config.py`) include the scattered-light metric
 (`SEESTAR_QA_SCATTER_REJECT_SIGMA`, `SEESTAR_QA_SCATTER_MARGINAL_SIGMA`,
 `SEESTAR_QA_SCATTER_ABSOLUTE`) alongside FWHM / eccentricity / SNR / star-count.
+
+> **⚠️ Hands-free data pull (SMB) — host-wide caveat.** Setting `SEESTAR_SEESTAR_IMAGE_ROOT`
+> to the Seestar's UNC share (e.g. `\\<seestar-ip>\EMMC Images\MyWorks`) lets `list_subs` /
+> `download_subs` read subs directly off the device with no mapped drive. But the Seestar
+> serves that share as an **unauthenticated guest**, which modern Windows blocks by default;
+> enabling it needs an **elevated, machine-wide** `Set-SmbClientConfiguration
+> -EnableInsecureGuestLogons $true` (revert with `$false`). This re-enables unsigned guest
+> SMB for the **whole machine** — a real security downgrade. Prefer the default HTTP transport
+> (no such change), keep the scope on an isolated VLAN if you do enable it, and revert when
+> done. Full detail in [`SECURITY.md`](SECURITY.md#data-access-the-smb--filesystem-backend-host-wide-caveat).
 
 ## Tools (33)
 
@@ -244,7 +286,7 @@ Like `seestar-mcp`, it speaks MCP over **stdio** — no network port. Register i
 processing host **before** starting the Claude Code session:
 
 ```bash
-claude mcp add seestar-refine -- uv --directory C:/Users/<user>/SeeStar-AI run python -m seestar_refine.server
+claude mcp add seestar-refine -- uv --directory C:/path/to/SeeStar-AI run python -m seestar_refine.server
 ```
 
 ### Configuration
@@ -313,3 +355,23 @@ See [`SECURITY.md`](SECURITY.md) for the threat model, the OWASP MCP Top 10 miti
 table, the supply-chain runbook (`uv lock` / `make sbom` / `make scan`), and secrets
 handling. The hardened systemd unit for the Jetson is in
 [`deploy/seestar-mcp.service`](deploy/seestar-mcp.service).
+
+## Legal & trademarks
+
+**Not affiliated with ZWO.** "Seestar" and "ZWO" are trademarks of Suzhou ZWO Co., Ltd. This
+project is unofficial and is **not** affiliated with, authorized, sponsored, or endorsed by
+ZWO; those names are used only to identify the hardware this software interoperates with.
+
+**Firmware interoperability key.** Seestar firmware 7.18+ requires an RSA handshake. This
+project **ships no ZWO firmware, no ZWO application code, and no key**, and contains **no
+tool to extract or circumvent any key** — it drives the external `seestar_alp`, which owns
+the handshake. To use real 7.18+ hardware you supply **your own** key file, extracted by you
+from **your own lawfully licensed** copy of the ZWO app for interoperability, as permitted
+under the reverse-engineering provision of **17 U.S.C. §1201(f)** (and analogous provisions
+elsewhere). That key is a user secret: it lives only in the gitignored `secrets/` dir or a
+`SEESTAR_SECRET_*` variable and is never committed. You are responsible for compliance with
+the laws of your own jurisdiction. See [`NOTICE`](NOTICE) for full third-party attribution.
+
+Licensed under the [MIT License](LICENSE). It drives — but never bundles or redistributes —
+`seestar_alp` (GPL-3.0, separate process), the external `pixinsight-mcp` (MIT), DeepSkyStacker
+(freeware), and PixInsight (commercial); each remains under its own license.
