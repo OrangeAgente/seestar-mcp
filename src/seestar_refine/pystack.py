@@ -199,6 +199,23 @@ def _load_raw(path: str) -> tuple[np.ndarray | None, str]:
         return None, ""
 
 
+def _coverage_bbox(
+    coverage: np.ndarray, kept: int, coverage_frac: float
+) -> tuple[int, int, int, int] | None:
+    """Largest rectangle where coverage >= ``coverage_frac * kept`` (intersection).
+
+    Returns the ``(r0, r1, c0, c1)`` box of the biggest fully-covered rectangle,
+    or ``None`` if it cannot be computed (caller then skips the crop).
+    """
+    try:
+        from .crop import largest_inscribed_rectangle
+
+        thr = max(1, int(np.ceil(float(coverage_frac) * max(1, kept))))
+        return largest_inscribed_rectangle(coverage >= thr)
+    except Exception:  # noqa: BLE001 - crop is best-effort; skip on failure
+        return None
+
+
 def stack(
     keep_list: KeepList,
     settings,
@@ -207,6 +224,7 @@ def stack(
     iters: int = 5,
     pattern: str | None = None,
     master_name: str | None = None,
+    coverage_frac: float = 0.98,
 ) -> StackResult:
     """Stack a keep-list into a ``(3, H, W)`` master with the pure-Python backend.
 
@@ -254,6 +272,9 @@ def stack(
         tmp = output_dir / f".{_slug(target)}_reg.dat"
         mm = np.memmap(tmp, dtype="float32", mode="w+", shape=(n_subs, h, w, 3))
         mm[0] = ref_rgb.astype("float32")  # reference is aligned to itself
+        # Per-pixel coverage: the reference covers everything; each warped frame
+        # covers only its footprint (astroalign 0-fills outside it).
+        coverage = np.ones((h, w), dtype="int32")
         kept, dropped = 1, 0
 
         for p in paths[1:]:
@@ -267,12 +288,22 @@ def stack(
                 dropped += 1
                 continue
             mm[kept] = reg.astype("float32")
+            coverage += (_luminance(reg) > 1e-6).astype("int32")
             kept += 1
 
         if kept < 3:
             return _fail(f"only {kept}/{n_subs} subs registered (need >=3)")
 
         master = integrate(mm[:kept], kappa=kappa, iters=iters)  # (H, W, 3)
+
+        # Intersection crop: keep only the region covered by (nearly) every frame,
+        # which excises the alt-az field-rotation border AND the coverage-step
+        # seams — the DSS "intersection mode" equivalent, done from the real map.
+        cov_bbox = _coverage_bbox(coverage, kept, coverage_frac)
+        if cov_bbox is not None:
+            r0, r1, c0, c1 = cov_bbox
+            master = master[r0:r1, c0:c1]
+
         cube = np.transpose(master, (2, 0, 1)).astype("float32")  # (3, H, W)
         master_path = output_dir / master_name
         fits.writeto(master_path, cube, overwrite=True)
@@ -284,7 +315,8 @@ def stack(
             master_path=str(master_path), preview_path=None,
             stats=_master_stats(str(master_path)),
             log=f"registered {kept}/{n_subs} (dropped {dropped}), "
-                f"kappa={kappa} iters={iters} pattern={pat}",
+                f"kappa={kappa} iters={iters} pattern={pat} "
+                f"intersection_crop={cov_bbox} cover>={coverage_frac}",
             error=None,
         )
     except Exception as exc:  # noqa: BLE001 - never raise; report structured error
