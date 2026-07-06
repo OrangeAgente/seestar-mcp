@@ -1258,12 +1258,12 @@ def _extract_focus_pos(focus: Any) -> int | None:
 def _parse_gps(dev: Any) -> tuple[float, float] | None:
     """Extract the scope's ``(lat, lon)`` from a ``get_device_state`` response.
 
-    # FIRMWARE-DEPENDENT: the ``get_device_state`` GPS schema is unconfirmed
-    against hardware — the real key is a best guess isolated to this single helper
-    (update here when the real shape is known). The likely shapes are tried in
-    order: a ``result`` envelope is unwrapped, then ``setting.lat``/``lon``,
+    HARDWARE-VALIDATED (Seestar S50, firmware 7.75): the GPS lives at
+    ``result.location_lon_lat`` as a ``[lon, lat]`` pair (longitude FIRST). That
+    validated shape is tried first. For resilience across firmware, the older
+    guessed shapes are kept as fallbacks: ``setting.lat``/``lon``,
     ``location.lat``/``lon``, or top-level ``lat``/``lon``. Any malformed/empty
-    input or a missing/ non-numeric pair returns ``None`` (GPS unknown → the
+    input or a missing/non-numeric pair returns ``None`` (GPS unknown → the
     caller fails safe by assuming the saved site).
     """
     if not isinstance(dev, dict) or not dev:
@@ -1271,16 +1271,20 @@ def _parse_gps(dev: Any) -> tuple[float, float] | None:
     root = dev.get("result") if isinstance(dev.get("result"), dict) else dev
     if not isinstance(root, dict):
         return None
+
+    def _num(v: Any) -> bool:
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+    # Validated shape (fw 7.75): [lon, lat].
+    pair = root.get("location_lon_lat")
+    if isinstance(pair, (list, tuple)) and len(pair) == 2 and _num(pair[0]) and _num(pair[1]):
+        return (float(pair[1]), float(pair[0]))
+
     for src in (root.get("setting"), root.get("location"), root):
         if not isinstance(src, dict):
             continue
         lat, lon = src.get("lat"), src.get("lon")
-        if (
-            isinstance(lat, (int, float))
-            and not isinstance(lat, bool)
-            and isinstance(lon, (int, float))
-            and not isinstance(lon, bool)
-        ):
+        if _num(lat) and _num(lon):
             return (float(lat), float(lon))
     return None
 
