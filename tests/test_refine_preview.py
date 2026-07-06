@@ -311,3 +311,33 @@ def test_auto_stretch_percentile_white_reveals_faint_signal():
     target_lo = float(lo[40:60, 40:60].mean())
     assert target_hi > target_lo + 30  # meaningfully brighter with percentile white
     assert target_hi > 150             # and actually visible
+
+
+def test_make_preview_full_pipeline(tmp_path):
+    # Every opt-in stage chained: gradient -> white_balance -> deconv -> stretch
+    # -> saturation -> upscale. Assert it runs end-to-end and records each stage.
+    from astropy.io import fits
+
+    from seestar_refine.preview import make_preview
+
+    h, w = 128, 128
+    _, xx = np.mgrid[0:h, 0:w]
+    base = 100.0 + (xx / w) * 40.0
+    cube = np.stack([base, base, base], axis=0).astype("float32")
+    cube[0, 30:33, 30:33] = 3000.0  # a red-biased star (exercises white balance)
+    p = tmp_path / "m.fit"
+    fits.writeto(p, cube, overwrite=True)
+
+    r = make_preview(p, tmp_path / "m.png", params={
+        "autocrop": False, "gradient": True, "gradient_box": 8,
+        "white_balance": True, "deconv": True, "deconv_iters": 3,
+        "saturation": 1.4, "upscale": 2,
+    })
+    assert r["ok"] is True
+    s = r["stats"]
+    for key in ("gradient", "white_balance", "deconv", "upscale"):
+        assert key in s
+    from PIL import Image
+
+    im = Image.open(r["preview_path"])
+    assert im.width == w * 2  # upscaled 2x (autocrop off)

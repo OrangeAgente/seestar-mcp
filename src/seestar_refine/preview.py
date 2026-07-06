@@ -357,6 +357,24 @@ def make_preview(
             )
             stats["gradient"] = ginfo
 
+        # Stage 3: star-based white balance (opt-in), linear domain.
+        if bool(params.get("white_balance", False)):
+            from . import color as _color
+
+            arr, wbinfo = _color.white_balance(
+                arr, star_frac=float(params.get("wb_star_frac", 0.005))
+            )
+            stats["white_balance"] = wbinfo
+
+        # Stage 5: Richardson-Lucy deconvolution (opt-in), linear domain.
+        if bool(params.get("deconv", False)):
+            from . import deconv as _deconv
+
+            d_sigma = float(params.get("deconv_sigma", 1.5))
+            d_iters = int(params.get("deconv_iters", 10))
+            arr = _deconv.deconvolve(arr, psf_sigma=d_sigma, iterations=d_iters)
+            stats["deconv"] = {"psf_sigma": d_sigma, "iterations": d_iters}
+
         kwargs = {}
         if "black_point_sigma" in params:
             kwargs["black_point_sigma"] = float(params["black_point_sigma"])
@@ -374,6 +392,26 @@ def make_preview(
             stretched = auto_stretch(balanced, linked=linked, **kwargs)
         else:
             stretched = auto_stretch(arr, **kwargs)
+
+        # Stage 6: saturation boost (opt-in; 1.0 = no change), post-stretch.
+        sat = float(params.get("saturation", 1.0))
+        if sat != 1.0 and stretched.ndim == 3:
+            from . import color as _color
+
+            stretched = _color.boost_saturation(stretched, sat)
+
+        # Stage 7: opt-in, provenance-labeled resolution upscale (final step).
+        up = int(params.get("upscale", 1))
+        if up > 1 and stretched.ndim == 3:
+            from . import upscale as _upscale
+
+            stretched, upinfo = _upscale.upscale(
+                stretched,
+                factor=up,
+                method=str(params.get("upscale_method", "lanczos")),
+                model_path=params.get("upscale_model"),
+            )
+            stats["upscale"] = upinfo
 
         from PIL import Image
 
