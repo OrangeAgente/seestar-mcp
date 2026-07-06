@@ -136,3 +136,12 @@ def test_stack_reports_unavailable_backend(tmp_path, monkeypatch):
     )
     assert res.ok is False
     assert "astroalign" in res.error.lower()
+
+
+def test_coverage_bbox_intersection():
+    from seestar_refine.pystack import _coverage_bbox
+
+    cov = np.full((20, 20), 2, dtype="int32")  # partial coverage everywhere
+    cov[5:15, 4:16] = 10                         # full-coverage interior
+    box = _coverage_bbox(cov, kept=10, coverage_frac=0.98)
+    assert box == (5, 15, 4, 16)  # cropped exactly to the intersection
