@@ -274,7 +274,7 @@ def stack(
     pattern: str | None = None,
     master_name: str | None = None,
     coverage_frac: float = 0.5,
-    flatten_frames: bool = True,
+    flatten_frames: bool = False,
 ) -> StackResult:
     """Stack a keep-list into a ``(3, H, W)`` master with the pure-Python backend.
 
