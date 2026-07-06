@@ -25,15 +25,29 @@ from __future__ import annotations
 import numpy as np
 
 
-def data_mask(lum: np.ndarray, *, threshold: float | None = None) -> np.ndarray:
+def data_mask(
+    lum: np.ndarray,
+    *,
+    threshold: float | None = None,
+    coverage_frac: float = 0.85,
+) -> np.ndarray:
     """Boolean valid-data mask (same ``H x W`` as ``lum``).
 
-    When ``threshold is None`` an auto threshold is derived from the luminance:
-    ``lo = nanpercentile(lum, 1)``, ``med = nanmedian(lum)``,
-    ``threshold = lo + 0.25 * (med - lo)`` — comfortably above the near-zero
-    border but below real sky/signal. The mask is
-    ``np.isfinite(lum) & (lum > threshold)``. Non-finite pixels are False. Never
-    raises: on bad input it falls back to an all-False mask of the input shape.
+    When ``threshold is None`` an auto threshold is derived from the luminance
+    as ``coverage_frac * nanmedian(lum)`` — a *coverage-oriented* cut. On an
+    alt-az master the fully-integrated interior sits at roughly the sky median,
+    while the field-rotation border ramps down toward zero as fewer subs cover
+    each pixel, so a threshold just below the median keeps the solid interior
+    and drops the dim border. The mask is ``np.isfinite(lum) & (lum > threshold)``.
+    Non-finite pixels are False. Never raises: on bad input it falls back to an
+    all-False mask of the input shape.
+
+    Note: brightness thresholding cannot *perfectly* excise a sheared
+    parallelogram on a smooth sky gradient — the border ramp straddles any
+    single cut, so faint wedges can survive a conservative ``coverage_frac``
+    while an aggressive one eats into an extended target. A pixel-exact crop
+    needs DSS's per-pixel coverage map (frame count), which we do not yet
+    capture; ``coverage_frac`` is the tunable knob until then.
     """
     try:
         arr = np.asarray(lum, dtype="float64")
@@ -41,9 +55,8 @@ def data_mask(lum: np.ndarray, *, threshold: float | None = None) -> np.ndarray:
         if threshold is None:
             if not finite.any():
                 return np.zeros(arr.shape, dtype=bool)
-            lo = float(np.nanpercentile(arr, 1.0))
             med = float(np.nanmedian(arr))
-            threshold = lo + 0.25 * (med - lo)
+            threshold = float(coverage_frac) * med
         return finite & (arr > float(threshold))
     except Exception:  # noqa: BLE001 - pure core, never raise on bad input
         try:
@@ -106,7 +119,11 @@ def largest_inscribed_rectangle(
 
 
 def autocrop(
-    img: np.ndarray, *, threshold: float | None = None, margin: int = 2
+    img: np.ndarray,
+    *,
+    threshold: float | None = None,
+    coverage_frac: float = 0.85,
+    margin: int = 2,
 ) -> tuple[np.ndarray, tuple[int, int, int, int]]:
     """Crop ``img`` to the largest inscribed rectangle of valid data.
 
@@ -127,7 +144,7 @@ def autocrop(
         else:
             lum = np.asarray(arr, dtype="float64")
 
-        mask = data_mask(lum, threshold=threshold)
+        mask = data_mask(lum, threshold=threshold, coverage_frac=coverage_frac)
         box = largest_inscribed_rectangle(mask)
         h, w = lum.shape[0], lum.shape[1]
         if box is None:
