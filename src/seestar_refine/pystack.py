@@ -183,6 +183,42 @@ def _luminance(rgb: np.ndarray) -> np.ndarray:
     return np.asarray(rgb, dtype="float64") @ _LUM_W
 
 
+def _flatten_frame(rgb: np.ndarray) -> np.ndarray:
+    """Subtract a per-channel linear gradient from one debayered frame.
+
+    Each frame carries its own light-pollution / sensor color gradient. On an
+    alt-az mount those gradients rotate with the field and, if left in, smear
+    into colored fan artifacts across the stack. Fitting and subtracting a
+    sigma-clipped linear plane per channel (re-adding its median so the frame
+    stays positive) removes the gradient before registration. Fast (fit on a
+    coarse sub-grid). Never raises: on failure the frame is returned unchanged.
+    """
+    try:
+        arr = np.asarray(rgb, dtype="float64")
+        if arr.ndim != 3 or arr.shape[-1] != 3:
+            return np.asarray(rgb)
+        h, w, _ = arr.shape
+        ys = np.linspace(0, h - 1, 48).astype(int)
+        xs = np.linspace(0, w - 1, 48).astype(int)
+        gy, gx = np.meshgrid(ys, xs, indexing="ij")
+        amat = np.column_stack([gx.ravel(), gy.ravel(), np.ones(gx.size)])
+        yy, xx = np.mgrid[0:h, 0:w]
+        out = arr.copy()
+        for c in range(3):
+            samp = arr[np.ix_(ys, xs)][..., c].ravel()
+            med = float(np.median(samp))
+            std = float(np.std(samp)) or 1.0
+            keep = np.abs(samp - med) < 2.5 * std  # reject stars/signal
+            if keep.sum() < 3:
+                continue
+            coef, *_ = np.linalg.lstsq(amat[keep], samp[keep], rcond=None)
+            plane = coef[0] * xx + coef[1] * yy + coef[2]
+            out[..., c] = arr[..., c] - plane + med
+        return out
+    except Exception:  # noqa: BLE001 - pure core, never raise on bad input
+        return np.asarray(rgb)
+
+
 def _load_raw(path: str) -> tuple[np.ndarray | None, str]:
     """Load a raw 2-D Bayer FITS -> ``(array, bayer_pattern)``; ``(None, "")`` on error."""
     try:
@@ -238,6 +274,7 @@ def stack(
     pattern: str | None = None,
     master_name: str | None = None,
     coverage_frac: float = 0.5,
+    flatten_frames: bool = True,
 ) -> StackResult:
     """Stack a keep-list into a ``(3, H, W)`` master with the pure-Python backend.
 
@@ -279,6 +316,8 @@ def stack(
             return _fail("reference sub could not be read")
         pat = pattern or ref_pat
         ref_rgb = debayer(ref_raw, pat)
+        if flatten_frames:
+            ref_rgb = _flatten_frame(ref_rgb)
         ref_lum = _luminance(ref_rgb)
         h, w = ref_lum.shape
 
@@ -296,6 +335,8 @@ def stack(
                 dropped += 1
                 continue
             rgb = debayer(raw, pat)
+            if flatten_frames:
+                rgb = _flatten_frame(rgb)
             reg = register(ref_lum, rgb, _luminance(rgb))
             if reg is None:
                 dropped += 1

@@ -149,3 +149,20 @@ def test_coverage_crop_masks_lowcov_and_trims():
     assert box == [5, 15, 4, 16]        # trimmed to the covered bounding box
     assert cropped.shape == (10, 12, 3)
     assert bool(np.all(cropped == 7.0))  # object intact; low-cov blacked + trimmed
+
+
+def test_flatten_frame_removes_gradient_keeps_stars():
+    from seestar_refine.pystack import _flatten_frame
+
+    h, w = 80, 80
+    yy, xx = np.mgrid[0:h, 0:w]
+    grad = 100.0 + 0.5 * xx + 0.3 * yy  # per-frame linear gradient
+    img = np.stack([grad, grad * 1.1, grad * 0.9], axis=-1)  # color gradient
+    img[40, 40] = [5000, 5000, 5000]  # a star
+
+    out = _flatten_frame(img)
+    # gradient removed: left vs right background nearly equal (was ~40 apart)
+    left = out[5:75, 5:15, 0].mean()
+    right = out[5:75, 65:75, 0].mean()
+    assert abs(left - right) < 5.0
+    assert out[40, 40, 0] > 3000  # star preserved
