@@ -420,6 +420,17 @@ def test_plan_targets_location_mismatch_discloses(tmp_path, monkeypatch):
     assert captured["site"].min_altitude_deg == 20.0
 
 
+def test_parse_gps_validated_firmware_schema():
+    # HARDWARE-VALIDATED (fw 7.75): result.location_lon_lat is [lon, lat].
+    dev = {"result": {"location_lon_lat": [<lon>, <lat>], "device": {}}}
+    assert server_mod._parse_gps(dev) == (<lat>, <lon>)
+    # Fallback shapes still parse; junk fails safe to None.
+    assert server_mod._parse_gps({"result": {"setting": {"lat": 10.0, "lon": 20.0}}}) == (10.0, 20.0)
+    assert server_mod._parse_gps({"result": {"location_lon_lat": [None, 45.0]}}) is None
+    assert server_mod._parse_gps({"result": {"location_lon_lat": [1.0]}}) is None
+    assert server_mod._parse_gps({}) is None
+
+
 def test_location_block_gps_unavailable(tmp_path, monkeypatch):
     c = _controller(tmp_path)
     _set_masked_site(c)
