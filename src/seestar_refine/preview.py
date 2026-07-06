@@ -347,6 +347,16 @@ def make_preview(
             stats["crop_bbox"] = [int(v) for v in crop_bbox]
             stats["cropped_shape"] = list(arr.shape)
 
+        # Stage-2 background/gradient flattening on the linear master, BEFORE
+        # color-balance/stretch. Opt-in (default off preserves prior behavior).
+        if bool(params.get("gradient", False)):
+            from . import gradient as _gradient
+
+            arr, ginfo = _gradient.subtract_gradient(
+                arr, box=int(params.get("gradient_box", 128))
+            )
+            stats["gradient"] = ginfo
+
         kwargs = {}
         if "black_point_sigma" in params:
             kwargs["black_point_sigma"] = float(params["black_point_sigma"])
