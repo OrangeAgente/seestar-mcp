@@ -68,7 +68,11 @@ def _mtf(midtone: float, x: np.ndarray) -> np.ndarray:
 
 
 def _stretch_channel(
-    channel: np.ndarray, *, black_point_sigma: float, midtone: float
+    channel: np.ndarray,
+    *,
+    black_point_sigma: float,
+    midtone: float,
+    white_percentile: float = 99.7,
 ) -> np.ndarray:
     """Auto-stretch a single 2-D channel to float ``[0, 1]``. Never raises."""
     median, std = _sigma_clipped_stats(channel)
@@ -78,6 +82,7 @@ def _stretch_channel(
         std=std,
         black_point_sigma=black_point_sigma,
         midtone=midtone,
+        white_percentile=white_percentile,
     )
 
 
@@ -89,13 +94,16 @@ def _apply_stretch(
     black_point_sigma: float,
     midtone: float,
     white: float | None = None,
+    white_percentile: float = 99.7,
 ) -> np.ndarray:
     """Normalize + MTF a channel using pre-computed ``median``/``std``.
 
     Split out from :func:`_stretch_channel` so a *linked* stretch can share one
     ``(median, std, white)`` transform across all channels. When ``white`` is
-    ``None`` the per-channel maximum is used (the historical behavior). Never
-    raises.
+    ``None`` the white point is the ``white_percentile`` percentile of the finite
+    pixels (default 99.7) rather than the raw maximum: a few saturated stars no
+    longer crush the whole stretch, so faint/compact targets (planetaries,
+    galaxy cores) keep real dynamic range. Never raises.
     """
     # Replace non-finite pixels with the robust median so they don't blow up
     # min/max normalization.
@@ -103,7 +111,12 @@ def _apply_stretch(
 
     black = median - black_point_sigma * std
     if white is None:
-        white = float(np.max(clean))
+        finite = channel[np.isfinite(channel)]
+        white = (
+            float(np.percentile(finite, white_percentile))
+            if finite.size
+            else float(np.max(clean))
+        )
     if not np.isfinite(white) or white <= black:
         # Degenerate/flat channel: nothing to stretch.
         return np.zeros_like(clean)
@@ -175,6 +188,7 @@ def auto_stretch(
     black_point_sigma: float = 2.8,
     midtone: float = 0.25,
     linked: bool = False,
+    white_percentile: float = 99.7,
 ) -> np.ndarray:
     """Auto-stretch a float image to ``uint8`` via a sigma-clipped MTF.
 
@@ -205,7 +219,11 @@ def auto_stretch(
                 lum = np.nanmean(sub, axis=-1)
                 median, std = _sigma_clipped_stats(lum)
                 finite = sub[np.isfinite(sub)]
-                white = float(np.max(finite)) if finite.size else None
+                white = (
+                    float(np.percentile(finite, white_percentile))
+                    if finite.size
+                    else None
+                )
                 channels = [
                     _apply_stretch(
                         arr[..., c],
@@ -214,6 +232,7 @@ def auto_stretch(
                         black_point_sigma=black_point_sigma,
                         midtone=midtone,
                         white=white,
+                        white_percentile=white_percentile,
                     )
                     for c in range(n)
                 ]
@@ -223,6 +242,7 @@ def auto_stretch(
                         arr[..., c],
                         black_point_sigma=black_point_sigma,
                         midtone=midtone,
+                        white_percentile=white_percentile,
                     )
                     for c in range(n)
                 ]
@@ -233,6 +253,7 @@ def auto_stretch(
                 np.squeeze(arr),
                 black_point_sigma=black_point_sigma,
                 midtone=midtone,
+                white_percentile=white_percentile,
             )
             if stretched.shape != arr.shape and stretched.size == arr.size:
                 stretched = stretched.reshape(arr.shape)
@@ -331,6 +352,8 @@ def make_preview(
             kwargs["black_point_sigma"] = float(params["black_point_sigma"])
         if "midtone" in params:
             kwargs["midtone"] = float(params["midtone"])
+        if "white_percentile" in params:
+            kwargs["white_percentile"] = float(params["white_percentile"])
 
         color_balance = bool(params.get("color_balance", True))
         is_color = arr.ndim == 3 and arr.shape[-1] == 3
