@@ -186,3 +186,19 @@ def test_synthetic_flat_divides_out_vignetting():
     corner = out[2:12, 88:98, 0].mean()        # opposite (top-right) corner
     assert abs(corner - ctr) < 0.08 * ctr
     assert out[20, 20, 0] > 3000               # star preserved
+
+
+def test_remove_cosmics_cleans_hot_pixels():
+    from seestar_refine.pystack import _remove_cosmics
+
+    rng = np.random.RandomState(0)
+    base = 100.0 + rng.normal(0, 3, (64, 64))
+    img = np.stack([base, base, base], axis=-1)
+    for (y, x) in [(10, 10), (30, 40), (50, 20)]:
+        img[y, x, :] = 6000.0  # sharp single-pixel cosmic-ray/hot-pixel spikes
+
+    out = _remove_cosmics(img, sigclip=4.5)
+    assert out.shape == img.shape
+    # the spikes are cleaned back toward the local background
+    for (y, x) in [(10, 10), (30, 40), (50, 20)]:
+        assert out[y, x, 0] < 500.0
