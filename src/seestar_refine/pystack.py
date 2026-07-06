@@ -183,6 +183,62 @@ def _luminance(rgb: np.ndarray) -> np.ndarray:
     return np.asarray(rgb, dtype="float64") @ _LUM_W
 
 
+def _synthetic_flat(
+    rgb: np.ndarray, *, degree: int = 2, min_value: float = 0.2
+) -> np.ndarray:
+    """Divide out per-frame multiplicative vignetting with a synthetic flat.
+
+    Vignetting/sensor response is a MULTIPLICATIVE shading fixed to the detector;
+    on an alt-az mount it rotates with the field and smears into corner "fans"
+    when stacked. The correct fix (per the flat-field literature — Siril,
+    ccdproc) is to *divide* by a normalized flat, not subtract a plane.
+
+    Per channel: fit a sigma-clipped 2-D polynomial (``degree`` — 2 captures the
+    radial fall-off; a localized target is too small for a global low-order fit
+    to chase, so it is preserved), normalize the model to its mean, and divide
+    the channel by it (clamped at ``min_value`` so vignetted corners don't blow
+    up). Fast (fit on a coarse sub-grid). Never raises: on failure the frame is
+    returned unchanged.
+    """
+    try:
+        arr = np.asarray(rgb, dtype="float64")
+        if arr.ndim != 3 or arr.shape[-1] != 3:
+            return np.asarray(rgb)
+        h, w, _ = arr.shape
+        ys = np.linspace(0, h - 1, 64).astype(int)
+        xs = np.linspace(0, w - 1, 64).astype(int)
+        gy, gx = np.meshgrid(ys, xs, indexing="ij")
+        sx, sy = gx.ravel() / w, gy.ravel() / h  # normalized coords for conditioning
+        terms = [np.ones_like(sx)]
+        for d in range(1, int(degree) + 1):
+            for k in range(d + 1):
+                terms.append((sx ** (d - k)) * (sy**k))
+        amat = np.column_stack(terms)
+        fx, fy = np.mgrid[0:h, 0:w][1] / w, np.mgrid[0:h, 0:w][0] / h
+        full = [np.ones_like(fx)]
+        for d in range(1, int(degree) + 1):
+            for k in range(d + 1):
+                full.append((fx ** (d - k)) * (fy**k))
+        out = arr.copy()
+        for c in range(3):
+            samp = arr[np.ix_(ys, xs)][..., c].ravel()
+            med = float(np.median(samp))
+            std = float(np.std(samp)) or 1.0
+            keep = np.abs(samp - med) < 2.5 * std  # reject stars/target core
+            if keep.sum() < len(terms):
+                continue
+            coef, *_ = np.linalg.lstsq(amat[keep], samp[keep], rcond=None)
+            model = sum(cf * fu for cf, fu in zip(coef, full))
+            mean = float(np.mean(model))
+            if not np.isfinite(mean) or mean <= 0:
+                continue
+            flat = np.clip(model / mean, float(min_value), None)
+            out[..., c] = arr[..., c] / flat
+        return out
+    except Exception:  # noqa: BLE001 - pure core, never raise on bad input
+        return np.asarray(rgb)
+
+
 def _flatten_frame(rgb: np.ndarray) -> np.ndarray:
     """Subtract a per-channel linear gradient from one debayered frame.
 
@@ -275,6 +331,7 @@ def stack(
     master_name: str | None = None,
     coverage_frac: float = 0.5,
     flatten_frames: bool = False,
+    flat_correct: bool = True,
 ) -> StackResult:
     """Stack a keep-list into a ``(3, H, W)`` master with the pure-Python backend.
 
@@ -316,6 +373,8 @@ def stack(
             return _fail("reference sub could not be read")
         pat = pattern or ref_pat
         ref_rgb = debayer(ref_raw, pat)
+        if flat_correct:
+            ref_rgb = _synthetic_flat(ref_rgb)
         if flatten_frames:
             ref_rgb = _flatten_frame(ref_rgb)
         ref_lum = _luminance(ref_rgb)
@@ -335,6 +394,8 @@ def stack(
                 dropped += 1
                 continue
             rgb = debayer(raw, pat)
+            if flat_correct:
+                rgb = _synthetic_flat(rgb)
             if flatten_frames:
                 rgb = _flatten_frame(rgb)
             reg = register(ref_lum, rgb, _luminance(rgb))

@@ -166,3 +166,23 @@ def test_flatten_frame_removes_gradient_keeps_stars():
     right = out[5:75, 65:75, 0].mean()
     assert abs(left - right) < 5.0
     assert out[40, 40, 0] > 3000  # star preserved
+
+
+def test_synthetic_flat_divides_out_vignetting():
+    from seestar_refine.pystack import _synthetic_flat
+
+    h, w = 100, 100
+    yy, xx = np.mgrid[0:h, 0:w].astype("float64")
+    cy, cx = (h - 1) / 2, (w - 1) / 2
+    r2 = ((xx - cx) ** 2 + (yy - cy) ** 2) / (cx**2 + cy**2)
+    vig = 1.0 - 0.5 * r2  # radial vignetting: center 1.0, corners ~0.5 (MULTIPLICATIVE)
+    sky = 100.0
+    img = np.stack([sky * vig, sky * vig, sky * vig], axis=-1)
+    img[20, 20] = [5000, 5000, 5000]  # a star off-center (not in measured regions)
+
+    out = _synthetic_flat(img, degree=2, min_value=0.2)
+    # vignetting divided out: corner background ~= center background (was ~1.6x apart)
+    ctr = out[45:55, 45:55, 0].mean()          # star-free center background
+    corner = out[2:12, 88:98, 0].mean()        # opposite (top-right) corner
+    assert abs(corner - ctr) < 0.08 * ctr
+    assert out[20, 20, 0] > 3000               # star preserved
