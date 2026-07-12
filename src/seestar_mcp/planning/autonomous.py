@@ -18,7 +18,7 @@ resolve to a conservative verdict (guardrails) or a skipped target (planner).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # Seestar sub-exposure (seconds). Sub counts for an allocated slot are derived
 # from the slot's own length, not the target's full sweet-band capacity.
@@ -70,9 +70,10 @@ def plan_night(
     dark_window_utc: tuple[str, str] | list[str],
     *,
     min_slot_min: float = 20.0,
+    max_slot_min: float | None = None,
     max_targets: int | None = None,
 ) -> list[ScheduledTarget]:
-    """Greedily sequence ranked targets into the dark window, non-overlapping.
+    """Sequence ranked targets into the dark window, non-overlapping.
 
     ``scored_targets`` is an already-ranked list of compact dicts (as produced
     by ``plan_targets``): each has ``id``, ``name``, ``best_window_utc``
@@ -80,6 +81,12 @@ def plan_night(
     processed in order of their window start; each is clamped to the remaining
     night ``[max(cursor, dark_start), dark_end]`` and kept only if it yields at
     least ``min_slot_min`` minutes. Pure and deterministic.
+
+    ``max_slot_min`` caps how long any ONE target may hold — without it, a target
+    whose sweet-band spans the whole night greedily consumes the entire window
+    and the schedule collapses to a single object (the 2026-07-12 symptom). With
+    it, each target yields after ``max_slot_min`` so the night ROTATES through
+    the ranked list. ``None`` preserves the old greedy behaviour.
     """
     if not scored_targets:
         return []
@@ -109,9 +116,12 @@ def plan_night(
     for w_start, w_end, target in parsed:
         if max_targets is not None and len(schedule) >= max_targets:
             break
-        # Clamp to the remaining night.
+        # Clamp to the remaining night, and cap the slot so one target can't
+        # hog the whole window (forces rotation through the ranked list).
         start = max(w_start, cursor, dark_start)
         end = min(w_end, dark_end)
+        if max_slot_min is not None:
+            end = min(end, start + timedelta(minutes=max_slot_min))
         if end <= start:
             continue  # window has already passed or falls outside the night
         minutes = (end - start).total_seconds() / 60.0

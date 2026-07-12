@@ -107,3 +107,28 @@ Reached on any hard stop, unrecoverable fault, end of schedule, or user stop.
 - **This skill decides *whether to keep going and what's next*; it does not re-implement
   motion** (that is `run-session`). Planning = `observing-planner`, execution =
   `run-session`, faults = `anomaly-playbook`, QA = `qa-policy`.
+
+## Field-tested notes (learned the hard way on the 2026-07-12 run)
+Ignoring these cost most of a night. They are non-obvious and hardware-confirmed.
+- **`goto_target` returns ok even when the mount does NOT slew.** Always verify the slew
+  (run-session Phase 1): `stage` must reach `Stack` and the pointing must approach the
+  target. A target stuck in `AutoGoto`/`Initialise` with 0 frames is **obstructed** (low,
+  behind a roof/tree) — SKIP it and take the next from the plan; don't wait it out. Prefer
+  high, unobstructed targets when the horizon is cluttered.
+- **PARK strands the pointing model.** `park` points the optics at the cradle; the firmware
+  can't plate-solve from there, so every subsequent goto silently fails to slew. **Park
+  ONLY at wind-down (Phase C).** To pause/resume mid-night use `stop_view`, never `park`.
+  Recovering a mid-session park needs a full re-alignment — a power-cycle, after which the
+  first goto runs a 3-point `Initialise` alignment (takes a few minutes) that also fixes
+  framing.
+- **Confirm framing with a real image, not telemetry.** Once per target (early), pull the
+  latest sub JPG off the SMB share and check the object is centred, focused, and cloud-free
+  (run-session "Visual framing check"). Frame counts don't prove the object is in frame — an
+  off-centre / edge-cut frame means the alignment is off and needs a power-cycle to fix.
+- **Summer / high-latitude twilight:** astronomical dark can be short (a couple of hours),
+  and there may be NO true darkness before sunrise. Put **broadband** targets in the real
+  dark and **LP/dual-band nebulae** into twilight — the dual-band tolerates the brightening
+  sky far better. Expect the drop rate to climb sharply toward civil dawn; that's the
+  natural end of the useful night, not a fault to chase.
+- **Coordinates:** pass catalog **J2000 degrees** to `goto_target` — it converts RA to the
+  firmware's hours internally. Don't pre-convert to hours (it double-converts).

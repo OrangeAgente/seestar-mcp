@@ -321,3 +321,60 @@ async def test_get_status_transport_error_returns_ok_false():
     result = await ctrl.get_status()  # must not raise past method-level guard
     assert result["ok"] is False
     assert result["error_number"] == -1
+
+
+# --- Regression tests for the 2026-07-12 live-session bugs ---
+
+
+async def test_goto_target_sends_ra_in_hours():
+    # HARDWARE: firmware's target_ra_dec wants RA in HOURS; the tool takes
+    # catalog DEGREES and must divide by 15. Passing degrees = silent no-slew.
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = {"result": 0}
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    await ctrl.goto_target("M51", 202.4696, 47.1952, session_id="hrs")
+    call = alpaca.method_sync.await_args
+    assert call.args[0] == "iscope_start_view"
+    ra_hours, dec = call.args[1]["target_ra_dec"]
+    assert abs(ra_hours - 202.4696 / 15.0) < 1e-6  # RA -> hours
+    assert abs(dec - 47.1952) < 1e-6               # Dec stays degrees
+
+
+async def test_set_dew_heater_uses_pi_output_set2():
+    # HARDWARE: heater is a power-output channel, not a set_setting key.
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = {"result": 0}
+    ctrl = _controller_with_mock_alpaca(alpaca)
+    result = await ctrl.set_dew_heater(True)
+    assert result["ok"] is True
+    call = alpaca.method_sync.await_args
+    assert call.args[0] == "pi_output_set2"
+    assert call.args[1] == {"heater": {"state": True, "value": 90}}
+    off = await ctrl.set_dew_heater(False)
+    assert off["ok"] is True
+    assert alpaca.method_sync.await_args.args[1] == {"heater": {"state": False, "value": 0}}
+
+
+def test_parse_device_health_reads_nested_is_verified():
+    from seestar_mcp.server import _parse_device_health
+
+    # Real shape: is_verified nested under result.device (NOT top level).
+    dev = {"result": {"device": {"is_verified": True}, "setting": {}}}
+    assert _parse_device_health(dev) == (True, True)
+    # Fail-safe on empty/malformed.
+    assert _parse_device_health({}) == (False, False)
+    assert _parse_device_health(None) == (False, False)
+    # Flat fallback for simple mocks.
+    assert _parse_device_health({"is_verified": True}) == (True, True)
+    # Nested but unverified.
+    assert _parse_device_health({"result": {"device": {"is_verified": False}}}) == (True, False)
+
+
+def test_parse_battery_reads_pi_get_info():
+    from seestar_mcp.server import _parse_battery
+
+    assert _parse_battery({"result": {"battery_capacity": 82}}) == 82.0
+    assert _parse_battery({}) is None
+    assert _parse_battery(None) is None
+    assert _parse_battery({"battery_capacity": 55}) == 55.0  # flat fallback
+    assert _parse_battery({"result": {"battery_capacity": True}}) is None  # bool != pct
