@@ -95,3 +95,24 @@ def test_guardrails_each_hard_stop():
         now_utc="2026-07-05T04:00:00Z", **{**base, "battery_pct": None}
     )
     assert isinstance(v.proceed, bool)
+
+
+def test_plan_night_max_slot_rotates_targets():
+    # Three targets sharing the whole dark window: without a cap the greedy
+    # sequencer hands ONE the entire window (2026-07-12 symptom); with
+    # max_slot_min it ROTATES through all three.
+    win = ("2026-07-12T00:00:00Z", "2026-07-12T03:00:00Z")  # 180 min
+    targets = [
+        {"id": f"T{i}", "name": f"T{i}", "best_window_utc": list(win),
+         "recommended_subs": 0}
+        for i in range(3)
+    ]
+    greedy = plan_night(targets, win)
+    assert len(greedy) == 1  # old behaviour: one target hogs the window
+
+    rotated = plan_night(targets, win, max_slot_min=45.0)
+    assert len(rotated) == 3  # rotates through all three
+    assert all(s.minutes <= 45.0 + 1e-6 for s in rotated)
+    # non-overlapping and ordered
+    assert rotated[0].end_utc <= rotated[1].start_utc
+    assert rotated[1].end_utc <= rotated[2].start_utc

@@ -217,13 +217,17 @@ class SeestarController:
             self.manifest.set_meta(
                 target=name, ra=ra, dec=dec, lp_filter=bool(use_lp_filter)
             )
-            # FIRMWARE-DEPENDENT: native goto method + param shape (unconfirmed
-            # against hardware; single updatable point).
+            # HARDWARE-VERIFIED (2026-07-12): the firmware's ``target_ra_dec``
+            # expects RA in HOURS and Dec in degrees. ``ra``/``dec`` arrive in
+            # DEGREES (J2000, matching the catalog), so RA must be divided by 15.
+            # Passing RA in degrees makes the goto SILENTLY no-op: it returns
+            # code 0 but the mount never slews (RA out of range) and drops to
+            # ContinuousExposure. This one line broke the whole 2026-07-12 run.
             result = await self.alpaca.method_sync(
                 "iscope_start_view",
                 {
                     "mode": "star",
-                    "target_ra_dec": [ra, dec],
+                    "target_ra_dec": [ra / 15.0, dec],
                     "target_name": name,
                     "lp_filter": bool(use_lp_filter),
                 },
@@ -337,9 +341,14 @@ class SeestarController:
         after toggling this.
         """
         try:
-            # FIRMWARE-DEPENDENT: setting key for the dew heater.
+            # HARDWARE-VERIFIED (2026-07-12): the dew heater is a power-output
+            # channel, NOT a ``set_setting`` key — ``set_setting {"heater":...}``
+            # and ``{"heater_enable":...}`` both return "unexpected param". The
+            # native method is ``pi_output_set2`` with a {state, value%} object;
+            # this flips ``heater_enable`` in get_device_state as confirmed live.
             result = await self.alpaca.method_sync(
-                "set_setting", {"heater": bool(on)}
+                "pi_output_set2",
+                {"heater": {"state": bool(on), "value": 90 if on else 0}},
             )
             if (bad := _native_fail(result, heater=bool(on))) is not None:
                 return bad
@@ -975,9 +984,9 @@ class SeestarController:
         """Dry-run tonight's autonomous plan as an ordered target schedule.
 
         Reads/computes only — issues NO device motion. Ranks tonight's targets
-        via :meth:`plan_targets`, then greedily packs them into the dark window
-        with the pure :func:`plan_night` sequencer. Reads the clock only to
-        resolve "tonight" when ``date`` is omitted.
+        via :meth:`plan_targets`, then rotates them through the dark window with
+        the pure :func:`plan_night` sequencer (45-min slot cap). Reads the clock
+        only to resolve "tonight" when ``date`` is omitted.
         """
         try:
             self.provenance.log_call(
@@ -992,7 +1001,9 @@ class SeestarController:
             if not plan.get("ok"):
                 return plan
             dark = dark_window(site, when)
-            sched = plan_night(plan["targets"], dark)
+            # Cap each slot (45 min) so the night ROTATES through the ranked list
+            # instead of handing one target the whole window (2026-07-12 fix).
+            sched = plan_night(plan["targets"], dark, max_slot_min=45.0)
             return {
                 "ok": True,
                 "conditions": plan.get("conditions"),
@@ -1037,12 +1048,21 @@ class SeestarController:
             dark = dark_window(site, now)
 
             # Live device health — fail SAFE to (disconnected, unverified,
-            # unknown) on ANY failure so a lost link parks the run.
+            # unknown) on ANY failure so a lost link parks the run. Identity comes
+            # from get_device_state; battery from pi_get_info (two native calls —
+            # battery is NOT in get_device_state).
             try:
                 dev = await self.alpaca.method_sync("get_device_state")
-                connected, verified, battery = _parse_device_health(dev)
+                connected, verified = _parse_device_health(dev)
             except Exception:  # noqa: BLE001 - any device fault → fail safe
-                connected, verified, battery = (False, False, None)
+                connected, verified = (False, False)
+            battery: float | None = None
+            if connected:
+                try:
+                    info = await self.alpaca.method_sync("pi_get_info")
+                    battery = _parse_battery(info)
+                except Exception:  # noqa: BLE001 - battery read is best-effort
+                    battery = None
 
             # Weather is best-effort and non-fatal: an outage → unknown, which
             # the guardrail core treats as observability-only, not a hard stop.
@@ -1289,27 +1309,41 @@ def _parse_gps(dev: Any) -> tuple[float, float] | None:
     return None
 
 
-def _parse_device_health(dev: Any) -> tuple[bool, bool, float | None]:
-    """Extract ``(connected, verified, battery_pct)`` from ``get_device_state``.
+def _parse_device_health(dev: Any) -> tuple[bool, bool]:
+    """Extract ``(connected, verified)`` from a ``get_device_state`` reply.
 
-    # FIRMWARE-DEPENDENT: the ``get_device_state`` schema is unconfirmed against
-    hardware — the identity-verification flag and the battery-level key are best
-    guesses isolated to this single helper (update here when the real shape is
-    known). ``connected`` is True only when we got a usable dict back; a battery
-    field is searched across the plausible key names below. Any malformed/empty
-    input fails SAFE to ``(False, False, None)`` so a lost link parks the run.
+    HARDWARE-VERIFIED (2026-07-12): ``is_verified`` is nested at
+    ``result.device.is_verified`` — NOT at the top level. Reading it flat made
+    the guardrail always report "unverified" and false-trip ``park_and_stop``.
+    Battery is NOT in ``get_device_state`` at all (see :func:`_parse_battery`,
+    which reads ``pi_get_info``). Falls back to a flat dict for simple mocks.
+    Any malformed/empty input fails SAFE to ``(False, False)``.
     """
     if not isinstance(dev, dict) or not dev:
-        return (False, False, None)
-    verified = bool(dev.get("is_verified", dev.get("verified", False)))
-    battery: float | None = None
-    # FIRMWARE-DEPENDENT: real battery key unconfirmed — try the likely names.
+        return (False, False)
+    result = dev.get("result")
+    device = result.get("device") if isinstance(result, dict) else None
+    src = device if isinstance(device, dict) and device else dev
+    verified = bool(src.get("is_verified", src.get("verified", False)))
+    return (True, verified)
+
+
+def _parse_battery(info: Any) -> float | None:
+    """Extract battery percent from a ``pi_get_info`` reply.
+
+    HARDWARE-VERIFIED (2026-07-12): battery lives at
+    ``result.battery_capacity`` in ``pi_get_info`` (not ``get_device_state``).
+    Falls back to a flat dict for simple mocks; unknown/malformed → ``None``.
+    """
+    if not isinstance(info, dict):
+        return None
+    result = info.get("result")
+    src = result if isinstance(result, dict) else info
     for key in ("battery_capacity", "battery", "bat_capacity"):
-        val = dev.get(key)
+        val = src.get(key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
-            battery = float(val)
-            break
-    return (True, verified, battery)
+            return float(val)
+    return None
 
 
 # ===========================================================================

@@ -50,13 +50,26 @@ tools. Follow the phases in order. Do not skip pre-flight. Treat every motion co
    If no project exists, proceed silently — no need to announce the absence.
 
 ## Phase 1 — Acquire target
-1. Resolve the target to RA/Dec if the user gave a name (use known catalog coordinates;
-   if uncertain, say so and ask). Pass JNow coordinates.
-2. `goto_target(name, ra, dec, use_lp_filter)` — choose the LP filter only for emission
-   nebulae under light pollution; leave it off for galaxies, clusters, and broadband
-   targets unless the user asks. State which choice you made and why in one line.
-3. After goto, `plate_solve` to confirm pointing. If the solve fails, do not start
-   stacking — hand off to the anomaly-playbook skill (pointing/transparency branch).
+1. Resolve the target to RA/Dec if the user gave a name (use catalog coordinates; if
+   uncertain, say so and ask). Pass **J2000 coordinates in DEGREES** — `goto_target`
+   converts RA to the firmware's hours internally. Do NOT pre-convert to hours.
+2. `goto_target(name, ra, dec, use_lp_filter)` — set the LP/dual-band filter ON for
+   emission nebulae and planetaries (they emit Hα/OIII, which the filter passes and which
+   tolerates light pollution and even twilight); leave it OFF for galaxies, clusters,
+   reflection nebulae, and broadband targets. State which choice you made and why in one
+   line.
+3. **Verify the slew actually happened — `goto_target` returns ok even when the mount did
+   NOT move.** Poll `get_view_state`: `stage` must progress `AutoGoto` → `Stack` and the
+   pointing must approach the target. Two failure signatures to catch and act on:
+   - **Stuck in `AutoGoto`/`Initialise` for >~3 min with 0 frames** → the field can't be
+     plate-solved: the target is **obstructed** (roof/tree — usually a low-altitude target).
+     Skip it and take the next target from the plan; do not keep waiting.
+   - **Dropped to `ContinuousExposure` with pointing unchanged from before the goto** → the
+     mount never slewed (parked, or bad coordinates). Recover via anomaly-playbook; do NOT
+     start stacking on a phantom goto.
+4. Once stacking has begun, confirm the solve (`plate_solve` or the stack's Annotate state).
+   If the solve fails, do not rely on the stack — hand off to the anomaly-playbook skill
+   (pointing/transparency branch).
 
 ## Phase 2 — Focus
 1. `run_autofocus`. Then `get_focuser_position` and record the value as the session
@@ -103,9 +116,24 @@ compact and phone-friendly — one line, lead with state.
   `M27 past its sweet band (nearing floor). Next up: M31 (score 78). Slew?`
   A slew to a new target is a motion command — ask first (see Hard rules / anomaly-playbook).
 
+### Visual framing check (do NOT trust telemetry alone)
+`stacked N` confirms frames are landing — NOT that the object is framed, focused, or
+cloud-free. **Pull the actual image at least once per target, EARLY (~after 5–10 min),
+not only at the end.** The scope writes each OK sub as a JPG to the SMB share
+(`<IMAGE_ROOT>/<Target>_sub/Light_*_<IRCUT|LP>_*.jpg`; `_LP_` in the filename confirms the
+dual-band filter engaged, `_IRCUT_` = broadband). View the latest sub and confirm:
+- **The object is IN FRAME and roughly centred.** If it's jammed against an edge or cut
+  off, the mount's pointing model is off (a poor/incomplete alignment) — every goto
+  inherits that offset. This needs a **re-alignment (power-cycle → fresh 3-point align)** to
+  fix; flag it to the user rather than collecting edge-framed frames all slot.
+- **Stars are tight** (focus good) and the **background is clean** (no cloud haze).
+For faint nebulae a single 10 s sub barely shows the object — that is normal; the
+accumulated stack reveals it. The check here is framing/focus/clouds, not depth.
+
 Only interrupt the user proactively for: a fault the anomaly-playbook says needs a
-decision, a quality collapse, a target leaving its sweet band, or a requested milestone
-(e.g. "ping me at 1 hour integration"). Otherwise let the session run quietly.
+decision, a quality collapse, a target leaving its sweet band, a framing/obstruction
+problem, or a requested milestone (e.g. "ping me at 1 hour integration"). Otherwise let
+the session run quietly.
 
 ## Phase 5 — Wind down
 1. `stop_view("Stack")` to end stacking cleanly.
