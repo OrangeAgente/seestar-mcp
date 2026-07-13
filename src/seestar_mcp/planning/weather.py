@@ -27,7 +27,9 @@ force a no-go: weather drives ``go``.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import httpx
@@ -288,12 +290,151 @@ class OpenMeteoSource:
         )
 
 
+_METEOBLUE_URL = "https://my.meteoblue.com/packages/basic-1h_clouds-1h"
+
+
+def _dewpoint(temp_c: float, rh_pct: float) -> float:
+    """Dewpoint (deg C) from temperature and relative humidity (Magnus formula).
+
+    meteoblue does not return dewpoint directly (Open-Meteo does), so derive it
+    to keep the shared dew-risk logic identical across both sources.
+    """
+    rh = max(1.0, min(100.0, rh_pct))
+    a, b = 17.27, 237.7
+    gamma = (a * temp_c) / (b + temp_c) + math.log(rh / 100.0)
+    return (b * gamma) / (a - gamma)
+
+
+class MeteoblueSource:
+    """Keyed weather backend: meteoblue's multi-model forecast (one HTTPS GET).
+
+    Same contract as :class:`OpenMeteoSource` — any network/shape error degrades
+    to the non-fatal ``source="unknown"`` fallback, so it never raises. meteoblue
+    returns hourly rows in the site's LOCAL time (with ``utc_timeoffset`` in the
+    metadata), so times are shifted to UTC before matching the dark window; wind
+    is m/s (converted to kph) and dewpoint is derived via :func:`_dewpoint`.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        client: httpx.AsyncClient | None = None,
+        timeout_s: float = 30.0,
+    ) -> None:
+        self._api_key = api_key
+        self._client = client
+        self._timeout_s = timeout_s
+
+    async def assess(
+        self,
+        site: SiteProfile,
+        window_utc: tuple[str, str],
+        *,
+        client: httpx.AsyncClient | None = None,
+    ) -> ConditionsAssessment:
+        params = {
+            "lat": site.lat_deg,
+            "lon": site.lon_deg,
+            "asl": site.elevation_m,
+            "format": "json",
+            "apikey": self._api_key,
+        }
+        active = client or self._client
+        try:
+            if active is not None:
+                response = await active.get(
+                    _METEOBLUE_URL, params=params, timeout=self._timeout_s
+                )
+            else:
+                async with httpx.AsyncClient(timeout=self._timeout_s) as owned:
+                    response = await owned.get(_METEOBLUE_URL, params=params)
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.RequestError:
+            return _unknown(window_utc)
+
+        try:
+            return self._interpret(payload, window_utc)
+        except Exception:  # noqa: BLE001 - any shape surprise is non-fatal
+            return _unknown(window_utc)
+
+    @staticmethod
+    def _interpret(
+        payload: dict, window_utc: tuple[str, str]
+    ) -> ConditionsAssessment:
+        """Turn a parsed meteoblue payload into a scored assessment."""
+        data = payload["data_1h"]
+        offset_h = float(payload.get("metadata", {}).get("utc_timeoffset", 0.0))
+        # meteoblue times are LOCAL ("YYYY-MM-DD HH:MM"); shift to UTC ISO so the
+        # shared, UTC-assuming window matcher selects the right rows.
+        utc_times = [
+            (
+                datetime.strptime(t, "%Y-%m-%d %H:%M") - timedelta(hours=offset_h)
+            ).strftime("%Y-%m-%dT%H:%M")
+            for t in data["time"]
+        ]
+        rows = _window_rows({"time": utc_times}, window_utc)
+
+        def col(name: str) -> list[float]:
+            values = data[name]
+            return [float(values[i]) for i in rows]
+
+        low, mid, high = col("lowclouds"), col("midclouds"), col("highclouds")
+        cloud_cover_pct = max(
+            max(a, b, c) for a, b, c in zip(low, mid, high, strict=True)
+        )
+
+        temps, humid = col("temperature"), col("relativehumidity")
+        min_spread = min(
+            t - _dewpoint(t, h) for t, h in zip(temps, humid, strict=True)
+        )
+        dew_risk = _dew_risk(min_spread)
+
+        wind_kph = max(col("windspeed")) * 3.6  # meteoblue m/s -> kph
+        humidity = max(humid)
+        max_precip = max(col("precipitation_probability"))
+
+        suitability = _score(cloud_cover_pct, wind_kph, max_precip)
+        go = suitability >= _GO_SUITABILITY and max_precip < _GO_PRECIP_PCT
+
+        reasons = [
+            f"cloud cover {cloud_cover_pct:.0f}% (worst over window)",
+            f"dew risk {dew_risk} (min temp-dewpoint spread {min_spread:.1f} deg C)",
+            f"wind up to {wind_kph:.0f} kph",
+        ]
+        if max_precip > 0:
+            reasons.append(f"precipitation probability up to {max_precip:.0f}%")
+
+        return ConditionsAssessment(
+            go=go,
+            suitability=suitability,
+            cloud_cover_pct=cloud_cover_pct,
+            dew_risk=dew_risk,
+            wind_kph=wind_kph,
+            transparency=_transparency(cloud_cover_pct, humidity),
+            seeing=_seeing(wind_kph),
+            moon_illum_frac=0.0,  # filled in by assess_conditions
+            dark_window_utc=window_utc,
+            source="meteoblue",
+            reasons=reasons,
+        )
+
+
+def resolve_source(api_key: str | None) -> WeatherSource:
+    """Pick the weather backend: meteoblue when an API key is present, else
+    Open-Meteo. One place for source selection so the planner stays agnostic."""
+    key = (api_key or "").strip()
+    return MeteoblueSource(key) if key else OpenMeteoSource()
+
+
 async def assess_conditions(
     site: SiteProfile,
     window_utc: tuple[str, str],
     moon_illum_frac: float,
     *,
     source: WeatherSource | None = None,
+    api_key: str | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> ConditionsAssessment:
     """Assess conditions and fold in the caller-supplied moon illumination.
@@ -304,7 +445,7 @@ async def assess_conditions(
     bright moon therefore lowers suitability but does NOT change ``go`` — the
     weather (or its absence) alone drives the go/no-go decision.
     """
-    backend = source or OpenMeteoSource()
+    backend = source or resolve_source(api_key)
     assessment = await backend.assess(site, window_utc, client=client)
 
     assessment.moon_illum_frac = moon_illum_frac

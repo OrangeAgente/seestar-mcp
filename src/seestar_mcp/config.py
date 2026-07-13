@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     # a different number.
     alpaca_device_num: int = 1
 
+    # --- Weather ---
+    # meteoblue multi-model API key (SEESTAR_METEOBLUE_API_KEY in .env, which is
+    # gitignored). When set, the planner uses meteoblue as the primary weather
+    # source with Open-Meteo as fallback; empty = Open-Meteo only. Not a device
+    # secret, but keep it out of source: it lives only in the gitignored .env.
+    meteoblue_api_key: str = ""
+
     # --- Seestar device on the LAN ---
     seestar_host: str = "127.0.0.1"  # Seestar LAN IP (station mode, DHCP reservation)
     jsonrpc_port: int = 4700  # native line-delimited JSON-RPC command/control

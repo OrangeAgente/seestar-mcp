@@ -170,3 +170,56 @@ async def test_openmeteo_source_directly_and_query_params():
     # with their extreme values, are filtered out.
     assert a.cloud_cover_pct == 20.0
     assert a.wind_kph == 30.0
+
+
+@respx.mock
+async def test_meteoblue_used_with_key_and_go():
+    # meteoblue returns LOCAL times (utc_timeoffset); the source shifts them to
+    # UTC to match the window. Local 22:00/23:00 @ -4 -> UTC 02:00/03:00 (in WINDOW).
+    respx.get(url__startswith="https://my.meteoblue.com/packages/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "metadata": {"utc_timeoffset": -4.0},
+                "data_1h": {
+                    "time": ["2026-07-04 22:00", "2026-07-04 23:00"],
+                    "lowclouds": [0, 5],
+                    "midclouds": [0, 0],
+                    "highclouds": [10, 10],
+                    "temperature": [18, 17],
+                    "relativehumidity": [60, 62],
+                    "windspeed": [1.5, 1.7],  # m/s
+                    "precipitation_probability": [0, 0],
+                },
+            },
+        )
+    )
+    a = await assess_conditions(SITE, WINDOW, moon_illum_frac=0.1, api_key="testkey")
+    assert a.source == "meteoblue"
+    assert a.go is True
+    assert a.cloud_cover_pct == 10.0  # worst layer over window
+    assert a.dew_risk == "low"
+    assert round(a.wind_kph, 1) == round(1.7 * 3.6, 1)  # m/s -> kph, max over window
+
+
+@respx.mock
+async def test_meteoblue_malformed_is_unknown_not_fatal():
+    respx.get(url__startswith="https://my.meteoblue.com/packages/").mock(
+        return_value=httpx.Response(200, json={"nope": True})
+    )
+    a = await assess_conditions(SITE, WINDOW, moon_illum_frac=0.0, api_key="k")
+    assert a.go is None
+    assert a.source == "unknown"
+
+
+def test_resolve_source_picks_backend():
+    from seestar_mcp.planning.weather import (
+        MeteoblueSource,
+        OpenMeteoSource,
+        resolve_source,
+    )
+
+    assert isinstance(resolve_source("abc"), MeteoblueSource)
+    assert isinstance(resolve_source(""), OpenMeteoSource)
+    assert isinstance(resolve_source(None), OpenMeteoSource)
+    assert isinstance(resolve_source("   "), OpenMeteoSource)  # whitespace = none

@@ -173,7 +173,7 @@ def test_plan_targets_with_mocked_engine(tmp_path, monkeypatch):
     monkeypatch.setattr(server_mod, "moon_illumination", lambda when: 0.1)
     monkeypatch.setattr(server_mod, "load_catalog", lambda: [])
 
-    async def _fake_assess(site, window, illum):
+    async def _fake_assess(site, window, illum, **kwargs):
         return _canned_conditions()
 
     monkeypatch.setattr(server_mod, "assess_conditions_weather", _fake_assess)
@@ -208,7 +208,7 @@ def test_plan_targets_compact_and_project_aware(tmp_path, monkeypatch):
     monkeypatch.setattr(server_mod, "moon_illumination", lambda when: 0.1)
     monkeypatch.setattr(server_mod, "load_catalog", lambda: [])
 
-    async def _fake_assess(site, window, illum):
+    async def _fake_assess(site, window, illum, **kwargs):
         return _canned_conditions()
 
     monkeypatch.setattr(server_mod, "assess_conditions_weather", _fake_assess)
@@ -242,7 +242,7 @@ def test_plan_targets_no_projects_when_disabled(tmp_path, monkeypatch):
     monkeypatch.setattr(server_mod, "moon_illumination", lambda when: 0.1)
     monkeypatch.setattr(server_mod, "load_catalog", lambda: [])
 
-    async def _fake_assess(site, window, illum):
+    async def _fake_assess(site, window, illum, **kwargs):
         return _canned_conditions()
 
     monkeypatch.setattr(server_mod, "assess_conditions_weather", _fake_assess)
@@ -336,7 +336,7 @@ def test_check_guardrails_disconnected_parks(tmp_path, monkeypatch):
     # Device state read fails -> _parse_device_health must yield connected=False.
     c.alpaca.method_sync.side_effect = RuntimeError("no get_device_state")
 
-    async def _fake_assess(site, window, illum):
+    async def _fake_assess(site, window, illum, **kwargs):
         return _canned_conditions()
 
     monkeypatch.setattr(server_mod, "assess_conditions_weather", _fake_assess)
@@ -362,7 +362,7 @@ def _masked_engine(monkeypatch):
     monkeypatch.setattr(server_mod, "moon_illumination", lambda when: 0.1)
     monkeypatch.setattr(server_mod, "load_catalog", lambda: [])
 
-    async def _fake_assess(site, window, illum):
+    async def _fake_assess(site, window, illum, **kwargs):
         return _canned_conditions()
 
     monkeypatch.setattr(server_mod, "assess_conditions_weather", _fake_assess)
