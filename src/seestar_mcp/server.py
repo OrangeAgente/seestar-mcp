@@ -712,7 +712,10 @@ class SeestarController:
             )
             window = dark_window(site_for_engine, when)
             illum = moon_illumination(when)
-            assessment = await assess_conditions_weather(site_for_engine, window, illum)
+            assessment = await assess_conditions_weather(
+                site_for_engine, window, illum,
+                api_key=self.settings.meteoblue_api_key,
+            )
             return {"ok": True, "location": block, **dataclasses.asdict(assessment)}
         except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
             return {"ok": False, "error": str(exc)}
@@ -797,7 +800,10 @@ class SeestarController:
             )
             illum = moon_illumination(when)
             window = dark_window(site_for_engine, when)
-            conditions = await assess_conditions_weather(site_for_engine, window, illum)
+            conditions = await assess_conditions_weather(
+                site_for_engine, window, illum,
+                api_key=self.settings.meteoblue_api_key,
+            )
             projects = (
                 load_projects(self._projects_path()) if prefer_projects else None
             )
@@ -897,7 +903,10 @@ class SeestarController:
                 try:
                     weather_go = (
                         await assess_conditions_weather(
-                            site, dark_window(site, now), 0.0
+                            site,
+                            dark_window(site, now),
+                            0.0,
+                            api_key=self.settings.meteoblue_api_key,
                         )
                     ).go
                 except Exception:  # noqa: BLE001 - weather outage is non-fatal
@@ -1067,7 +1076,11 @@ class SeestarController:
             # Weather is best-effort and non-fatal: an outage → unknown, which
             # the guardrail core treats as observability-only, not a hard stop.
             try:
-                weather_go = (await assess_conditions_weather(site, dark, 0.0)).go
+                weather_go = (
+                    await assess_conditions_weather(
+                        site, dark, 0.0, api_key=self.settings.meteoblue_api_key
+                    )
+                ).go
             except Exception:  # noqa: BLE001 - weather outage is non-fatal
                 weather_go = None
 
