@@ -290,7 +290,10 @@ class OpenMeteoSource:
         )
 
 
-_METEOBLUE_URL = "https://my.meteoblue.com/packages/basic-1h_clouds-1h"
+# meteoblue's 1-hourly clouds package (clouds-1h) is PAID; on the free tier we
+# request clouds at 3-hourly resolution (clouds-3h) alongside 1-hourly basics.
+# basic-1h stays 1-hourly for precip/wind/temp; clouds land in a data_3h block.
+_METEOBLUE_URL = "https://my.meteoblue.com/packages/basic-1h_clouds-3h"
 
 
 def _dewpoint(temp_c: float, rh_pct: float) -> float:
@@ -364,23 +367,37 @@ class MeteoblueSource:
         payload: dict, window_utc: tuple[str, str]
     ) -> ConditionsAssessment:
         """Turn a parsed meteoblue payload into a scored assessment."""
-        data = payload["data_1h"]
         offset_h = float(payload.get("metadata", {}).get("utc_timeoffset", 0.0))
-        # meteoblue times are LOCAL ("YYYY-MM-DD HH:MM"); shift to UTC ISO so the
-        # shared, UTC-assuming window matcher selects the right rows.
-        utc_times = [
-            (
-                datetime.strptime(t, "%Y-%m-%d %H:%M") - timedelta(hours=offset_h)
-            ).strftime("%Y-%m-%dT%H:%M")
-            for t in data["time"]
-        ]
-        rows = _window_rows({"time": utc_times}, window_utc)
+
+        def to_utc(times: list[str]) -> list[str]:
+            # meteoblue times are LOCAL ("YYYY-MM-DD HH:MM"); shift to UTC ISO so
+            # the shared, UTC-assuming window matcher selects the right rows.
+            return [
+                (
+                    datetime.strptime(t, "%Y-%m-%d %H:%M")
+                    - timedelta(hours=offset_h)
+                ).strftime("%Y-%m-%dT%H:%M")
+                for t in times
+            ]
+
+        data = payload["data_1h"]
+        rows = _window_rows({"time": to_utc(data["time"])}, window_utc)
 
         def col(name: str) -> list[float]:
             values = data[name]
             return [float(values[i]) for i in rows]
 
-        low, mid, high = col("lowclouds"), col("midclouds"), col("highclouds")
+        # Cloud layers come from the 3-hourly package: on meteoblue's free tier
+        # the 1-hourly clouds package is paid, so clouds arrive in data_3h at a
+        # coarser cadence and must be matched to the window on their own rows.
+        clouds = payload.get("data_3h", data)
+        crows = _window_rows({"time": to_utc(clouds["time"])}, window_utc)
+
+        def ccol(name: str) -> list[float]:
+            values = clouds[name]
+            return [float(values[i]) for i in crows]
+
+        low, mid, high = ccol("lowclouds"), ccol("midclouds"), ccol("highclouds")
         cloud_cover_pct = max(
             max(a, b, c) for a, b, c in zip(low, mid, high, strict=True)
         )

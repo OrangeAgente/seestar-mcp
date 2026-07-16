@@ -183,13 +183,17 @@ async def test_meteoblue_used_with_key_and_go():
                 "metadata": {"utc_timeoffset": -4.0},
                 "data_1h": {
                     "time": ["2026-07-04 22:00", "2026-07-04 23:00"],
-                    "lowclouds": [0, 5],
-                    "midclouds": [0, 0],
-                    "highclouds": [10, 10],
                     "temperature": [18, 17],
                     "relativehumidity": [60, 62],
                     "windspeed": [1.5, 1.7],  # m/s
                     "precipitation_probability": [0, 0],
+                },
+                # Clouds arrive 3-hourly (clouds-1h is paid on the free tier).
+                "data_3h": {
+                    "time": ["2026-07-04 22:00", "2026-07-05 01:00"],
+                    "lowclouds": [0, 5],
+                    "midclouds": [0, 0],
+                    "highclouds": [10, 10],
                 },
             },
         )
