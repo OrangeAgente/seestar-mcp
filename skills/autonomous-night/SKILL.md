@@ -119,12 +119,16 @@ Ignoring these cost most of a night. They are non-obvious and hardware-confirmed
   can't plate-solve from there, so every subsequent goto silently fails to slew. **Park
   ONLY at wind-down (Phase C).** To pause/resume mid-night use `stop_view`, never `park`.
   Recovering a mid-session park needs a full re-alignment — a power-cycle, after which the
-  first goto runs a 3-point `Initialise` alignment (takes a few minutes) that also fixes
-  framing.
-- **Confirm framing with a real image, not telemetry.** Once per target (early), pull the
-  latest sub JPG off the SMB share and check the object is centred, focused, and cloud-free
-  (run-session "Visual framing check"). Frame counts don't prove the object is in frame — an
-  off-centre / edge-cut frame means the alignment is off and needs a power-cycle to fix.
+  first goto runs a 3-point `Initialise` alignment (takes a few minutes). Note this restores
+  pointing/tracking but does NOT cure the systematic framing offset below.
+- **Confirm framing with a real image, not telemetry.** Once per target (early), check the
+  object is in frame, focused, and cloud-free — cheaply via the live plate-solve annotation
+  (`Stack.Annotate` centre `pixelx/pixely` + `radius`), or the latest sub JPG off the SMB
+  share (run-session "Visual framing check"). Frame counts don't prove the object is in frame.
+  **A modest frame-left offset is a KNOWN systematic ~20–30′ pointing error on this unit — a
+  power-cycle + fresh dark 3PPA does NOT fix it** (proven 2026-07-15/16). If the object is
+  fully captured, just off-centre, accept it and keep imaging; only escalate if it's cut off
+  at an edge. Flag it as a firmware/optical calibration issue, not a re-align.
 - **Summer / high-latitude twilight:** astronomical dark can be short (a couple of hours),
   and there may be NO true darkness before sunrise. Put **broadband** targets in the real
   dark and **LP/dual-band nebulae** into twilight — the dual-band tolerates the brightening
@@ -132,3 +136,10 @@ Ignoring these cost most of a night. They are non-obvious and hardware-confirmed
   natural end of the useful night, not a fault to chase.
 - **Coordinates:** pass catalog **J2000 degrees** to `goto_target` — it converts RA to the
   firmware's hours internally. Don't pre-convert to hours (it double-converts).
+- **Never run a file offload off the scope's SMB share during the run** (learned 2026-07-15/16).
+  Heavy transfers saturate the Seestar's Wi-Fi and starve its control link — the bridge can't
+  authenticate and the whole run stalls. Do offloads before the run or after wind-down only.
+- **A target dropping EVERYTHING ≠ end of night.** Distinguish a *local* block (roof/tree in
+  the low NE, or a drifting cloud bank) from a *global* one (dew / widespread cloud) by slewing
+  to a high target in a different direction: if it stacks clean, skip the blocked spot and keep
+  going; only wind down if the whole sky is bad. Don't abandon the night on one clouded patch.
