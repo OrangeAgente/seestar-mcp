@@ -122,10 +122,17 @@ cloud-free. **Pull the actual image at least once per target, EARLY (~after 5–
 not only at the end.** The scope writes each OK sub as a JPG to the SMB share
 (`<IMAGE_ROOT>/<Target>_sub/Light_*_<IRCUT|LP>_*.jpg`; `_LP_` in the filename confirms the
 dual-band filter engaged, `_IRCUT_` = broadband). View the latest sub and confirm:
-- **The object is IN FRAME and roughly centred.** If it's jammed against an edge or cut
-  off, the mount's pointing model is off (a poor/incomplete alignment) — every goto
-  inherits that offset. This needs a **re-alignment (power-cycle → fresh 3-point align)** to
-  fix; flag it to the user rather than collecting edge-framed frames all slot.
+- **The object is IN FRAME.** A modest off-centre offset (roughly frame-left) is a KNOWN
+  **systematic pointing offset (~20–30′)** on this unit — it does NOT come from a stale
+  alignment and a **power-cycle + fresh dark 3PPA does NOT fix it** (verified 2026-07-15/16:
+  the offset survived a restart, re-level, and fresh dark 3PPA). The pixel position varies
+  with sky angle (alt-az rotation smears the fixed angular error around the frame), so it is
+  benign for small/centred targets but can clip the halo of a large one. **If the object is
+  fully captured, just off-centre → accept it and keep imaging; do NOT burn a slot or a
+  power-cycle chasing a re-centre.** Only escalate if the object is genuinely cut off at an
+  edge. Flag the systematic offset for a firmware/optical calibration fix, not a re-align.
+  (Confirm framing cheaply from the live plate-solve annotation — `Stack.Annotate` gives the
+  object's centre `pixelx/pixely` and `radius` in the 1080×1920 frame — without pulling the JPG.)
 - **Stars are tight** (focus good) and the **background is clean** (no cloud haze).
 For faint nebulae a single 10 s sub barely shows the object — that is normal; the
 accumulated stack reveals it. The check here is framing/focus/clouds, not depth.
@@ -161,3 +168,21 @@ the session run quietly.
 - Confirm each motion command's success before issuing the next.
 - At wind-down, always log the session to the project (`log_session_result`) so
   integration accumulates toward the goal across nights.
+
+## Field-tested notes (learned the hard way on the 2026-07-15/16 run)
+- **Do NOT run a heavy file transfer off the scope's SMB share during a session.** Pulling
+  images off the Seestar's EMMC share saturates the scope's Wi-Fi and starves its control
+  link — the seestar_alp bridge then fails to authenticate (`get_verify_str` times out,
+  "Seestar Alpha Connection Failed"). Pause any offload BEFORE imaging; resume it only after
+  wind-down. (Related: the scope may drop its SMB share when it sleeps after `park`, so finish
+  offloads while it's awake.)
+- **A target that drops EVERYTHING (0 stacked, drops climbing) is not automatically clouds.**
+  It is usually a **local obstruction** (roof/tree — the low NE is the worst offender here) or
+  a **drifting cloud bank**, not a global condition. Disambiguate: slew to a high target in a
+  **different** part of the sky. If it stacks clean → the first spot was locally blocked, skip
+  it and image elsewhere. If it also drops → it's global (dew / widespread cloud) → wind down.
+  Don't end the night on one bad patch of sky. Consider a horizon mask for the known roofline.
+- **`run_autofocus` may fail** with firmware "method not found" (the MCP's method name is out
+  of sync with firmware). The S50 auto-focuses during its boot sequence, so proceed on that
+  boot focus and confirm star tightness from the framing JPG — do NOT block the session on
+  autofocus. (Fix the method name in the MCP separately.)
