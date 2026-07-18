@@ -25,6 +25,10 @@ secrets/
 *.pem
 *.key
 
+# Docker local config / secrets (commit only the .example templates)
+deploy/docker/.env.docker
+deploy/docker/config.toml
+
 # SBOM output
 sbom*.json
 sbom*.xml

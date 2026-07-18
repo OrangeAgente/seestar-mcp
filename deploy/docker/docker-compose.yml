@@ -1,0 +1,62 @@
+name: seestar
+
+networks:
+  seestar_net:
+    name: seestar_net
+    driver: bridge
+
+volumes:
+  seestar-data:
+    name: seestar-data
+
+services:
+  # The external seestar_alp bridge — built from YOUR pinned source checkout
+  # (SEESTAR_ALP_DIR), not vendored here. Long-lived; owns the device handshake.
+  seestar-alp:
+    container_name: seestar-alp
+    image: seestar-alp:local
+    build:
+      context: ${SEESTAR_ALP_DIR:?set SEESTAR_ALP_DIR to a pinned seestar_alp SOURCE checkout}
+      dockerfile: docker/Dockerfile
+      args:
+        ASTRO_PLATFORM: ALPACA
+    networks: [seestar_net]
+    ports:
+      # SSC web UI — moved OFF 5432 to dodge the Sentinel/postgres collision.
+      - "127.0.0.1:${SSC_PORT:-5433}:5433"
+      # Alpaca — reachable network-internally as seestar-alp:5555; also published
+      # to loopback for host-side debugging (safe: localhost only).
+      - "127.0.0.1:5555:5555"
+    volumes:
+      - type: bind
+        source: ./config.toml
+        target: /home/seestar/seestar_alp/device/config.toml
+        read_only: true
+      # RSA interop key (firmware 7.18+). Defaults to an empty mount when unset;
+      # set SEESTAR_CLIENT_KEY to your PEM path for firmware >= 7.18.
+      - type: bind
+        source: ${SEESTAR_CLIENT_KEY:-/dev/null}
+        target: /etc/seestar/seestar_client_key.pem
+        read_only: true
+    environment:
+      - TZ=${TZ:-Etc/UTC}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5555/management/apiversions', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The MCP server is NOT a service here — it speaks MCP over stdio and is launched
+# on-demand by Claude Code. After `docker compose up -d seestar-alp`, register it:
+#
+#   docker build -f deploy/docker/Dockerfile.mcp -t seestar-mcp:local .
+#   claude mcp add seestar-mcp -- \
+#     docker run -i --rm --network seestar_net \
+#       -v seestar-data:/app/data \
+#       --env-file deploy/docker/.env.docker \
+#       seestar-mcp:local
+# ─────────────────────────────────────────────────────────────────────────────
