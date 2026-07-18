@@ -5,14 +5,17 @@ one `docker compose` stack. Use this instead of the host `uv` + systemd path whe
 isolate both processes in Docker (e.g. sharing a host with other services such as a Sentinel
 postgres backend).
 
-## Why the SSC port moved to 5433
+## Why the SSC port moved to 5544
 
 `seestar_alp` serves two ports: the **ASCOM Alpaca API on `5555`** (the only port the MCP server
-talks to) and the **SSC web UI on `5432`** by default. `5432` is also postgres's default port, so
-on a shared host it collides with a postgres backend. This stack moves the **SSC web UI to `5433`**
-(via `uiport` in `config.toml` + the published port in compose). The Alpaca port stays `5555`, and
-the MCP server reaches the bridge over the compose network at `http://seestar-alp:5555` — no MCP
-config change is needed for the collision fix.
+talks to) and the **SSC web UI on `5432`** by default. `5432` is postgres's default port, so on a
+shared host it collides with a postgres backend — and a postgres often gets remapped to the
+next-door `5433`, so that neighbour is frequently taken too. This stack therefore defaults the
+**SSC web UI to `5544`** — clear of the whole `5432`/`5433` postgres neighbourhood — via `uiport`
+in `config.toml` and the published host port in compose. Pick any free port with `SSC_PORT` in
+`.env.docker` (keep it equal to `uiport`). The Alpaca port stays `5555`, and the MCP server reaches
+the bridge over the compose network at `http://seestar-alp:5555` — **no MCP config change is needed
+for the collision fix.**
 
 ## Topology
 
@@ -20,8 +23,8 @@ config change is needed for the collision fix.
 ┌─ network: seestar_net ───────────────────────────────────────────────┐
 │  seestar-mcp (stdio, on-demand)        seestar-alp (long-lived svc)   │
 │  docker run -i --rm --network seestar_net                             │
-│    SEESTAR_ALPACA_BASE_URL ───────────▶ :5555  Alpaca  (network + 127.0.0.1)
-│      = http://seestar-alp:5555          :5433  SSC UI  (127.0.0.1 only)│
+│    SEESTAR_ALPACA_BASE_URL ───────────▶ :5555  Alpaca  (network only)  │
+│      = http://seestar-alp:5555          :5544  SSC UI  (127.0.0.1 only)│
 │    -v seestar-data:/app/data                                          │
 └──────────────────────────────────┬────────────────────────────────────┘
                                     └─▶ LAN: Seestar (fixed IP)
@@ -39,6 +42,10 @@ session, joined to `seestar_net`.
   then `git checkout <reviewed-ref>`). **A compiled/PyInstaller distribution has no `docker/Dockerfile`
   and cannot be built** — you need the source tree. `seestar_alp` is external and GPL-3.0; it is **not**
   vendored into this repo — the compose file builds it from *your* checkout.
+  - **Windows hosts:** clone with LF preserved — `git clone --config core.autocrlf=false ...` — or the
+    container crash-loops with `/usr/bin/env: 'bash\r': No such file or directory` (exit 127): Git's
+    default `autocrlf=true` rewrites upstream's shell entrypoints to CRLF, which breaks the shebang
+    inside the Linux image. Linux/Jetson build hosts are unaffected.
 - Your scope's **fixed LAN IP** (DHCP reservation). The bridge runs on a user-defined network without
   mDNS, so `seestar.local` will not resolve — use the IP.
 - (Firmware 7.18+) your RSA interop key `seestar_client_key.pem`.
@@ -57,7 +64,7 @@ cp config.toml.example config.toml
 cp .env.docker.example .env.docker
 #    edit .env.docker:
 #      SEESTAR_ALP_DIR=/absolute/path/to/seestar_alp   # your pinned source checkout
-#      SSC_PORT=5433                                    # or any free port != 5432
+#      SSC_PORT=5544                                    # or any free port != 5432
 #      SEESTAR_CLIENT_KEY=/abs/path/to/seestar_client_key.pem   # firmware 7.18+ only
 #      SEESTAR_METEOBLUE_API_KEY=...                    # optional (planner weather)
 ```
@@ -78,8 +85,14 @@ docker build -f deploy/docker/Dockerfile.mcp -t seestar-mcp:local .
 Verify the bridge:
 
 ```bash
-curl -fsS http://127.0.0.1:5555/management/apiversions      # Alpaca -> {"Value":[1],...}
-curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5433/   # SSC UI -> 200 (on 5433, not 5432)
+# SSC web UI is published to the host on 5544 (not 5432):
+curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5544/   # -> 200
+
+# Alpaca (5555) is NOT published to the host — it's reachable in-network as
+# seestar-alp:5555, so it can't collide with a native seestar_alp on the host.
+# Check it from within seestar_net:
+docker run --rm --network seestar_net curlimages/curl:latest \
+  -fsS http://seestar-alp:5555/management/apiversions          # -> {"Value":[1],...}
 ```
 
 ## Register the MCP server with Claude Code

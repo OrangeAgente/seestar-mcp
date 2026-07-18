@@ -12,7 +12,7 @@ sthost = 'localhost'
 rtsp_udp = true
 
 [webui_settings]
-uiport = 5433            # <-- OVERRIDE: SSC web UI moved off 5432 (Sentinel/postgres collision)
+uiport = 5544            # <-- OVERRIDE: SSC web UI moved off 5432 (Sentinel/postgres collision)
 uitheme = "dark"
 confirm = true
 

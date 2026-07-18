@@ -5,6 +5,14 @@
 **Status:** Approved direction (from discussion) — ready for implementation planning
 **Builds on:** current stdio-MCP + external-`seestar_alp` deployment (`deploy/seestar-mcp.service`, `README.md`, `SECURITY.md`).
 
+> **Update (2026-07-18, post-implementation):** The SSC web UI port is **5544**, not `5433` as
+> written throughout this spec. During bring-up testing the host's Sentinel/postgres backend
+> (`intelligence-platform-postgres`) was found already mapped to `127.0.0.1:5433`, so `5433` would
+> have re-created the collision. `5544` sits clear of the whole `5432`/`5433` postgres neighbourhood
+> and is the committed default (configurable via `SSC_PORT`). Also: the Alpaca `5555` port is **not**
+> host-published (kept network-internal via `expose`) to avoid colliding with a native `seestar_alp`
+> already bound to host `:5555`. All operational files use these values; read `5433 → 5544` below.
+
 ---
 
 ## Goal

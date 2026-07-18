@@ -43,8 +43,9 @@ Claude app (phone)  ──TLS──▶  Anthropic API  ──TLS──▶  Jetso
 The optional Docker stack (`deploy/docker/`, see `deploy/docker/README-docker.md`) preserves these
 boundaries: the MCP server still speaks **stdio with no listening socket** (launched as
 `docker run -i`), reaching the bridge over a private `seestar_net` at `http://seestar-alp:5555`
-instead of `127.0.0.1:5555`. The bridge publishes only to **localhost** (`127.0.0.1:5433` SSC web UI —
-moved off `5432` to avoid a postgres collision; `127.0.0.1:5555` Alpaca for debugging). Caveat:
+instead of `127.0.0.1:5555`. The bridge publishes only the **SSC web UI to localhost** (`127.0.0.1:5544` — moved off `5432` to
+avoid a postgres collision); the Alpaca port stays **network-internal** on `seestar_net` (not
+host-published), so it can't collide with a native `seestar_alp` on the host. Caveat:
 Docker only weakly approximates the systemd unit's egress allowlist / syscall filter / read-only
 filesystem, so the **hardened systemd path remains the strongest-isolation option**; the container
 stack is the alternative when co-tenancy or portability matters more than maximal egress control.
