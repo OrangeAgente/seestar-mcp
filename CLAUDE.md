@@ -86,6 +86,12 @@ TDD, subagent-driven. All tests run offline: hardware (alpaca/device state), wea
 seeded fixtures (`tests/fixtures/*.fits`, incl. `good`/`bad_ecc`/`bad_snr`/`hazy`). No test
 touches the network or real hardware.
 
+## Branching & done
+
+Branch for any non-trivial change (never commit to `main`); keep each branch one
+coherent concern; merge promptly and delete. "Done" = `uv run pytest` green **and**
+`uv run ruff check src tests` clean — never claim done without them.
+
 ## Deploy / run
 
 - MCP transport is **stdio** — no inbound socket. Register BEFORE starting a Remote Control
