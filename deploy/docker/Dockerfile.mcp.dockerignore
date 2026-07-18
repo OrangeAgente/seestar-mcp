@@ -1,0 +1,20 @@
+# BuildKit uses this file (named <dockerfile>.dockerignore) for builds that pass
+# -f deploy/docker/Dockerfile.mcp, in preference to any context-root .dockerignore.
+# Context is the repo root; keep it tiny — the image only needs pyproject/uv.lock/src.
+.git
+.venv
+data
+docs
+deploy
+tests
+skills
+*.fits
+*.pem
+*.key
+.env
+.env.docker
+__pycache__
+.pytest_cache
+.ruff_cache
+sbom*.json
+sbom*.xml
