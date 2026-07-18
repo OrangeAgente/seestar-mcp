@@ -8,6 +8,14 @@
 
 **Tech Stack:** Docker 29.x + Compose v5, `python:3.12-slim`, `ghcr.io/astral-sh/uv:0.10.12`, upstream `seestar_alp` (ubuntu:24.04, Flask/waitress).
 
+> **Update (2026-07-18, as-built):** Two values changed from what this plan says, both from
+> bring-up testing: (1) the SSC web UI is **5544**, not `5433` — the host's Sentinel postgres was
+> already on `127.0.0.1:5433`, so `5433` collided; `5544` is clear of the `5432`/`5433` cluster and
+> is the committed default. (2) The Alpaca `5555` port is **not** host-published (network-internal
+> via `expose:`), because a native `seestar_alp` already held host `:5555`; the MCP container reaches
+> it as `seestar-alp:5555` regardless. Read `5433 → 5544` throughout, and the compose `ports:` block
+> publishes only SSC.
+
 ## Global Constraints
 
 - **stdio MCP, no inbound socket.** MCP container publishes no ports; launched per session by Claude Code.

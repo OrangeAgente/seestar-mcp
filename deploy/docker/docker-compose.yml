@@ -21,12 +21,17 @@ services:
       args:
         ASTRO_PLATFORM: ALPACA
     networks: [seestar_net]
+    # Alpaca (5555) + imaging (7556) stay network-internal: the MCP container
+    # reaches them as seestar-alp:5555 over seestar_net, and NOT publishing them
+    # avoids colliding with a native seestar_alp already bound to :5555 on the host.
+    expose:
+      - "5555"
+      - "7556"
     ports:
-      # SSC web UI — moved OFF 5432 to dodge the Sentinel/postgres collision.
-      - "127.0.0.1:${SSC_PORT:-5433}:5433"
-      # Alpaca — reachable network-internally as seestar-alp:5555; also published
-      # to loopback for host-side debugging (safe: localhost only).
-      - "127.0.0.1:5555:5555"
+      # Only the SSC web UI is published to the host — moved OFF 5432 to dodge the
+      # Sentinel/postgres collision. To debug Alpaca from the host, add a temporary
+      # publish, e.g. `docker run ... -p 127.0.0.1:5556:5555`, or an override file.
+      - "127.0.0.1:${SSC_PORT:-5544}:5544"
     volumes:
       - type: bind
         source: ./config.toml
@@ -47,7 +52,9 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      # root_app.py blocks the Alpaca listener (:5555) behind its initial scope-connect
+      # attempt — ~40s when the scope is unreachable (offline mode) — so give it headroom.
+      start_period: 75s
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The MCP server is NOT a service here — it speaks MCP over stdio and is launched
