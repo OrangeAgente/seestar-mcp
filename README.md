@@ -90,6 +90,14 @@ On the Windows development machine, use the repo path here instead:
 claude mcp add seestar-mcp -- uv --directory C:/path/to/SeeStar-AI run python -m seestar_mcp.server
 ```
 
+### Run in containers (alternative)
+
+To run both the `seestar_alp` bridge and this server in Docker instead of on the host, see
+[`deploy/docker/README-docker.md`](deploy/docker/README-docker.md). A `docker compose` stack runs the
+bridge long-lived while Claude Code launches the stdio MCP server as an on-demand container that
+reaches the bridge at `http://seestar-alp:5555`. In that stack the bridge's **SSC web UI is on `5433`,
+not `5432`** — moved to avoid colliding with a postgres backend on the same host.
+
 ## Install / dev
 
 ```bash
