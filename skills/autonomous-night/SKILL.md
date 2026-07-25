@@ -43,6 +43,9 @@ and park (fail safe).**
      `1. M27 · 22:40–00:10 UTC · 90 min · 540×10s · long sweet-band pass, suits site.`
    - the **guardrail defaults** that will apply: dawn margin (15 min), battery floor
      (20%), max session (10 h), weather no-go stops.
+   - a note that **each target spends ~2–4 min acquiring** (alignment + autofocus) before
+     its first frame stacks, so a 45-min slot yields roughly 42 min of integration. Do not
+     promise the full slot as integration time.
 3. **State plainly that this is a dry run and REQUIRE explicit user confirmation before
    ANY motion command.** Say it in one line, e.g.
    `Dry run only — nothing has moved. Reply "go" to start the run; I'll park at dawn or on any hard stop.`
@@ -51,6 +54,21 @@ and park (fail safe).**
 4. If conditions are **no-go** (`simulate_night` returns `ok:false`, an empty schedule,
    or a no-go verdict), say so in one line and **do not start.** Offer to re-simulate
    later or for a clearing window, but issue no motion.
+
+## Guardrail semantics (read this before overriding a stop)
+Hard stops are **predictive, not reactive.** `check_night_guardrails` reads the forecast and
+device health, so a weather stop can fire while the current sky is still stacking cleanly
+with zero dropped frames. **That is correct behavior, not a false positive** — the lead time
+is exactly what lets the mount stop and fold *before* precipitation or heavy dew arrives.
+Two signals commonly drive it:
+- **precipitation** forecast inside the session window, and
+- **dew risk** — a small temperature/dew-point spread (a couple of °C or less) means
+  condensation forming on the optics, which ends the night's usefulness even under a clear
+  sky.
+
+When a stop fires: corroborate once with `assess_conditions` to get the human-readable
+reason, state it in one line, and **wind down (Phase C).** Do not re-run the check hoping
+for a different answer, and never resume a stopped run unless the user explicitly asks.
 
 ## Phase B — Loop (per target)
 Record the run's `session_start_utc` at first go-ahead. Then, for each target:
@@ -108,38 +126,43 @@ Reached on any hard stop, unrecoverable fault, end of schedule, or user stop.
   motion** (that is `run-session`). Planning = `observing-planner`, execution =
   `run-session`, faults = `anomaly-playbook`, QA = `qa-policy`.
 
-## Field-tested notes (learned the hard way on the 2026-07-12 run)
-Ignoring these cost most of a night. They are non-obvious and hardware-confirmed.
-- **`goto_target` returns ok even when the mount does NOT slew.** Always verify the slew
-  (run-session Phase 1): `stage` must reach `Stack` and the pointing must approach the
-  target. A target stuck in `AutoGoto`/`Initialise` with 0 frames is **obstructed** (low,
-  behind a roof/tree) — SKIP it and take the next from the plan; don't wait it out. Prefer
-  high, unobstructed targets when the horizon is cluttered.
+## Operating notes
+Non-obvious behaviors that cost real observing time when ignored.
+- **`goto_target` returns ok even when the mount does NOT slew, and a normal alignment sits
+  in `Initialise` for minutes.** Use the acquisition discriminator in **`run-session`**
+  (Phase 1) to tell a healthy alignment from an unsolvable field; skip obstructed targets
+  rather than waiting them out. Prefer high, unobstructed targets when the horizon is
+  cluttered.
 - **PARK strands the pointing model.** `park` points the optics at the cradle; the firmware
   can't plate-solve from there, so every subsequent goto silently fails to slew. **Park
   ONLY at wind-down (Phase C).** To pause/resume mid-night use `stop_view`, never `park`.
   Recovering a mid-session park needs a full re-alignment — a power-cycle, after which the
-  first goto runs a 3-point `Initialise` alignment (takes a few minutes). Note this restores
-  pointing/tracking but does NOT cure the systematic framing offset below.
+  first goto runs a 3-point `Initialise` alignment (takes a few minutes).
 - **Confirm framing with a real image, not telemetry.** Once per target (early), check the
   object is in frame, focused, and cloud-free — cheaply via the live plate-solve annotation
-  (`Stack.Annotate` centre `pixelx/pixely` + `radius`), or the latest sub JPG off the SMB
-  share (run-session "Visual framing check"). Frame counts don't prove the object is in frame.
-  **A modest frame-left offset is a KNOWN systematic ~20–30′ pointing error on this unit — a
-  power-cycle + fresh dark 3PPA does NOT fix it** (proven 2026-07-15/16). If the object is
-  fully captured, just off-centre, accept it and keep imaging; only escalate if it's cut off
-  at an edge. Flag it as a firmware/optical calibration issue, not a re-align.
-- **Summer / high-latitude twilight:** astronomical dark can be short (a couple of hours),
-  and there may be NO true darkness before sunrise. Put **broadband** targets in the real
+  (`Stack.Annotate` centre `pixelx/pixely` + `radius`), or the newest sub JPG from the
+  scope's share. Frame counts don't prove the object is in frame. If it is off-centre,
+  **classify the offset** with the procedure in **`run-session`** ("Visual framing check")
+  before reacting — do not assume it is systematic, and do not burn a slot re-centring one
+  that is.
+- **High-latitude / short nights:** astronomical dark can be short, and at high latitude in
+  summer there may be no true darkness before sunrise. Put **broadband** targets in the real
   dark and **LP/dual-band nebulae** into twilight — the dual-band tolerates the brightening
-  sky far better. Expect the drop rate to climb sharply toward civil dawn; that's the
-  natural end of the useful night, not a fault to chase.
+  sky far better. Expect the drop rate to climb sharply toward dawn; that's the natural end
+  of the useful night, not a fault to chase.
 - **Coordinates:** pass catalog **J2000 degrees** to `goto_target` — it converts RA to the
   firmware's hours internally. Don't pre-convert to hours (it double-converts).
-- **Never run a file offload off the scope's SMB share during the run** (learned 2026-07-15/16).
-  Heavy transfers saturate the Seestar's Wi-Fi and starve its control link — the bridge can't
-  authenticate and the whole run stalls. Do offloads before the run or after wind-down only.
-- **A target dropping EVERYTHING ≠ end of night.** Distinguish a *local* block (roof/tree in
-  the low NE, or a drifting cloud bank) from a *global* one (dew / widespread cloud) by slewing
-  to a high target in a different direction: if it stacks clean, skip the blocked spot and keep
-  going; only wind down if the whole sky is bad. Don't abandon the night on one clouded patch.
+- **Never run a file offload off the scope's share during the run.** Heavy transfers
+  saturate the scope's Wi-Fi and starve its control link — the bridge can't authenticate and
+  the whole run stalls. Do offloads before the run or after wind-down only.
+- **A target dropping EVERYTHING ≠ end of night.** Distinguish a *local* block (a low
+  bearing over a roofline or tree line, or a drifting cloud bank) from a *global* one (dew /
+  widespread cloud) by slewing to a high target in a different direction: if it stacks clean,
+  skip the blocked spot and keep going; only wind down if the whole sky is bad. Don't abandon
+  the night on one clouded patch.
+- **Pacing a long slot.** A 45-minute slot does not need minute-by-minute polling, and tight
+  loops cost more than they reveal. Sample the stack counters on a slow cadence (~1 min) and
+  watch for three exit conditions: the **slot boundary**, a **drop-spike** (dropped frames
+  climbing sharply across consecutive samples — a cloud bank or something drifting into the
+  light path), or a **link fault** (repeated solve failures or connection errors). Any of
+  those warrants a decision; between them, stay quiet.
