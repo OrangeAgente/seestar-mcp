@@ -152,9 +152,9 @@ Non-obvious behaviors that cost real observing time when ignored.
   of the useful night, not a fault to chase.
 - **Coordinates:** pass catalog **J2000 degrees** to `goto_target` — it converts RA to the
   firmware's hours internally. Don't pre-convert to hours (it double-converts).
-- **Never run a file offload off the scope's share during the run.** Heavy transfers
-  saturate the scope's Wi-Fi and starve its control link — the bridge can't authenticate and
-  the whole run stalls. Do offloads before the run or after wind-down only.
+- **Never run a file offload off the scope's share during the run.** Heavy transfers compete
+  with the scope's control link and can starve it — the run may stall, or the bridge may fail
+  to authenticate. Do offloads before the run or after wind-down only.
 - **A target dropping EVERYTHING ≠ end of night.** Distinguish a *local* block (a low
   bearing over a roofline or tree line, or a drifting cloud bank) from a *global* one (dew /
   widespread cloud) by slewing to a high target in a different direction: if it stacks clean,

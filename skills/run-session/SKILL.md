@@ -35,9 +35,12 @@ tools. Follow the phases in order. Do not skip pre-flight. Treat every motion co
    advise a 10–15 min acclimation before relying on stacked output. If the user plans
    to use the dew heater, note that enabling it after darks were built invalidates them
    — set it BEFORE the session and let darks rebuild, or accept re-enhancement later.
-4. Note the mount mode. If Alt-Az (default), warn that field rotation will cause rising
-   frame rejection after ~15 min and a spiral border on the stack — this is expected,
-   not a fault. EQ mode (wedge + polar align) avoids this.
+4. Note the mount mode. If Alt-Az (default), warn that field rotation causes rising frame
+   rejection through a pass and a spiral border on the stack — expected, not a fault. How
+   quickly it bites depends on where the target sits: worst near the zenith, far slower at
+   low declination, so a sweet-band target can run a long clean slot while a near-zenith one
+   trails within minutes. Do not treat elapsed time as the trigger. EQ mode (wedge + polar
+   align) avoids this.
 5. **Read the rig profile if present.** If `docs/RIG-PROFILE.md` exists, read it once now
    and treat its contents as observations about *this specific unit and site* — not as
    general Seestar behavior. If it does not exist, proceed normally and run the relevant
@@ -51,6 +54,11 @@ tools. Follow the phases in order. Do not skip pre-flight. Treat every motion co
 2. Once a target is chosen (by the user or the planner), call `get_project(target)`. If a
    project exists, state its progress in ONE line so the user knows what tonight adds:
    `M31: 2.5 h of 6 h — adding more tonight.`
+   Projects are created automatically the first time a session is logged, but they have **no
+   goal** until someone sets one. With no goal, report the accumulated total instead
+   (`M31: 2.5 h collected — adding more tonight.`) and, if the user seems to be building a
+   deep image, offer once to set a target with `set_project_goal`. A goal is what makes
+   `recommend_projects` and "needs more data" ranking meaningful.
    If no project exists, proceed silently — no need to announce the absence.
 
 ## Phase 1 — Acquire target
@@ -142,7 +150,8 @@ cloud-free. **Check the actual field at least once per target, EARLY (~5–10 mi
 only at the end.** The cheapest source is the live plate-solve annotation: `get_view_state`
 → `Stack.Annotate` gives the object's centre `pixelx`/`pixely` and `radius` in the
 1080×1920 frame. Alternatively pull the newest sub JPG the scope writes to its share
-(`_LP_` in the filename confirms the dual-band filter engaged, `_IRCUT_` = broadband).
+(on the tested firmware, `_LP_` in the filename confirms the dual-band filter engaged and
+`_IRCUT_` means broadband — check your own filenames if the convention differs).
 Confirm three things: the object is **in frame**, stars are **tight** (focus good), and the
 background is **clean** (no cloud haze).
 
@@ -172,8 +181,13 @@ the session run quietly.
 
 ## Phase 5 — Wind down
 1. `stop_view("Stack")` to end stacking cleanly.
-2. `download_subs(target, dest, since=session_start)` to pull the session's subs to the
-   local data dir.
+2. `download_subs(target=<target>, dest=<local dir>)` to pull the subs to the local data
+   dir. Pass arguments **by keyword** — the second positional parameter is `names`, not
+   `dest`. **There is no server-side "since" filter:** this pulls what the scope holds for
+   that target, so if earlier nights' subs for the same target are still on the device they
+   come too — and mixing nights corrupts session-relative QA thresholds. When the device
+   still holds prior data for the target, call `list_subs(target)` first and pass just
+   tonight's filenames: `download_subs(target=<target>, names=[...], dest=<local dir>)`.
 3. Run `qa_session_report(target)` to produce the JSON+Markdown report and the keep-list.
    Summarize for the user: total integration, kept vs rejected counts, median FWHM,
    the dominant rejection cause if any, and where the report and keep-list were written.
@@ -199,8 +213,9 @@ the session run quietly.
 
 ## Operating notes
 - **Do NOT run a heavy file transfer off the scope's share during a session.** Pulling images
-  off the scope saturates its Wi-Fi and starves the control link — the bridge then fails to
-  authenticate and the session stalls. Offload before the session or after wind-down.
+  off the scope competes with its control link and can starve it — symptoms range from a
+  stalled session to the bridge failing to authenticate. Offload before the session or after
+  wind-down.
   (The scope may also drop its share when it sleeps after `park`, so finish offloads while it
   is awake.)
 - **A target that drops EVERYTHING (0 stacked, drops climbing) is not automatically clouds.**
