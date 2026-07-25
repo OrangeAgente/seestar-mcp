@@ -32,7 +32,7 @@
 
 ```bash
 # Must print nothing once the file exists.
-grep -nEi "45\.4|75\.6|<city>|joshu|192\.168|C:\\\\|\\\\\\\\|ssid|[A-Za-z0-9]{16,}" docs/RIG-PROFILE.md
+grep -nEi "<lat>|<lon>|<city>|<user>|<lan-ip>|C:\\\\|\\\\\\\\|ssid|[A-Za-z0-9]{16,}" docs/RIG-PROFILE.md
 ```
 Expected before the file exists: `No such file or directory`.
 
@@ -80,7 +80,7 @@ Fill in only what you have actually measured. "Unknown" is a valid, honest answe
 
 - [ ] **Step 3: Run the privacy assertion**
 
-Run: `grep -nEi "45\.4|75\.6|<city>|joshu|192\.168|C:\\\\|\\\\\\\\|ssid|[A-Za-z0-9]{16,}" docs/RIG-PROFILE.md`
+Run: `grep -nEi "<lat>|<lon>|<city>|<user>|<lan-ip>|C:\\\\|\\\\\\\\|ssid|[A-Za-z0-9]{16,}" docs/RIG-PROFILE.md`
 Expected: no output (exit 1). If anything prints, remove it.
 
 - [ ] **Step 4: Commit**
@@ -505,7 +505,7 @@ Content must contain, in this order:
 
 ```bash
 grep -cE "Prerequisites|Safety|Compatibility|License" skills/README.md
-grep -nEi "45\.4|75\.6|<city>|joshu|192\.168|C:\\\\|ssid" skills/README.md
+grep -nEi "<lat>|<lon>|<city>|<user>|<lan-ip>|C:\\\\|ssid" skills/README.md
 ```
 Expected: first ≥ 4; second no output.
 
@@ -526,7 +526,7 @@ git -c core.autocrlf=false commit -m "docs(skills): bundle README with prerequis
 
 ```bash
 grep -rnE "on this unit|learned the hard way|2026-07-[0-9]|worst offender here|5 GHz is flaky" skills/
-grep -rnEi "<city>|joshu|192\.168|45\.40|75\.66|C:\\\\|\\\\\\\\[a-z]|ssid|EMMC Images" skills/ docs/RIG-PROFILE.md
+grep -rnEi "<city>|<user>|<lan-ip>|<lat>|<lon>|C:\\\\|\\\\\\\\[a-z]|ssid|EMMC Images" skills/ docs/RIG-PROFILE.md
 ```
 Expected: both print nothing.
 
