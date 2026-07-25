@@ -38,6 +38,10 @@ tools. Follow the phases in order. Do not skip pre-flight. Treat every motion co
 4. Note the mount mode. If Alt-Az (default), warn that field rotation will cause rising
    frame rejection after ~15 min and a spiral border on the stack — this is expected,
    not a fault. EQ mode (wedge + polar align) avoids this.
+5. **Read the rig profile if present.** If `docs/RIG-PROFILE.md` exists, read it once now
+   and treat its contents as observations about *this specific unit and site* — not as
+   general Seestar behavior. If it does not exist, proceed normally and run the relevant
+   diagnostic when a symptom actually appears.
 
 ## Phase 0.5 — Consult the plan (before acquire)
 1. If the user asked to "image tonight" (or similar) **without naming a specific target**,
@@ -58,24 +62,40 @@ tools. Follow the phases in order. Do not skip pre-flight. Treat every motion co
    tolerates light pollution and even twilight); leave it OFF for galaxies, clusters,
    reflection nebulae, and broadband targets. State which choice you made and why in one
    line.
-3. **Verify the slew actually happened — `goto_target` returns ok even when the mount did
-   NOT move.** Poll `get_view_state`: `stage` must progress `AutoGoto` → `Stack` and the
-   pointing must approach the target. Two failure signatures to catch and act on:
-   - **Stuck in `AutoGoto`/`Initialise` for >~3 min with 0 frames** → the field can't be
-     plate-solved: the target is **obstructed** (roof/tree — usually a low-altitude target).
-     Skip it and take the next target from the plan; do not keep waiting.
+3. **Expect a multi-stage acquisition, and budget for it.** A goto normally progresses
+   `Initialise` → `3PPA` (a 3-point plate-solve alignment, which runs its own `AutoFocus`)
+   → `AutoGoto` → `Stack`. On a healthy run this takes **~2–4 minutes** before the first
+   frame stacks. Budget it into every slot: a 45-minute slot yields roughly 42 minutes of
+   integration, and a six-target night spends ~20 minutes acquiring.
+4. **Verify the slew actually happened — `goto_target` returns ok even when the mount did
+   NOT move.** Poll `get_view_state`. Healthy progress = plate-solves reaching `complete`,
+   the `3PPA` percentage climbing, and `ScopeGoto` `dist_deg` shrinking toward ~0. Two
+   failure signatures to catch and act on:
+   - **Genuinely stuck:** >~4 min elapsed **and** no solve progress (or repeated solve
+     failures) **and** zero frames stacked. That is an unsolvable field — usually
+     **obstructed** (roof, tree, wall; typically a low target). Skip it and take the next
+     target from the plan; do not wait it out. **Do not diagnose this from elapsed time
+     alone** — a normal alignment also sits in `Initialise` for minutes.
    - **Dropped to `ContinuousExposure` with pointing unchanged from before the goto** → the
      mount never slewed (parked, or bad coordinates). Recover via anomaly-playbook; do NOT
      start stacking on a phantom goto.
-4. Once stacking has begun, confirm the solve (`plate_solve` or the stack's Annotate state).
+5. Once stacking has begun, confirm the solve (`plate_solve` or the stack's Annotate state).
    If the solve fails, do not rely on the stack — hand off to the anomaly-playbook skill
    (pointing/transparency branch).
 
-## Phase 2 — Focus
-1. `run_autofocus`. Then `get_focuser_position` and record the value as the session
-   focus baseline (it feeds drift detection in monitoring).
-2. If autofocus fails or returns an implausible position, retry once; if it fails again,
-   hand off to the anomaly-playbook skill (focus branch).
+## Phase 2 — Focus (usually already done for you)
+1. **Acquisition normally focuses the scope.** The `Initialise` sequence a goto triggers
+   runs its own autofocus (visible as an `AutoFocus` event reaching `complete`, then the
+   focuser settling). In the normal case there is nothing to do here: confirm focus was
+   established and record the position from `get_focuser_position` as the session baseline
+   for drift detection.
+2. **`run_autofocus` is optional and firmware-dependent.** The MCP tool exists, but on some
+   firmware the underlying device method is unavailable and the call returns an error. Use
+   it only for a *deliberate mid-session refocus* (see the focus-drift branch in
+   anomaly-playbook). **Never block a session on it** — if it errors, you already have the
+   focus established during acquisition.
+3. If the focuser position is implausible, or stars look soft in the Phase 4 framing check,
+   hand off to the anomaly-playbook skill (focus branch) rather than improvising.
 
 ## Phase 3 — Stack
 1. `start_stack`. Confirm via `get_view_state` that the stacking count begins
@@ -118,22 +138,30 @@ compact and phone-friendly — one line, lead with state.
 
 ### Visual framing check (do NOT trust telemetry alone)
 `stacked N` confirms frames are landing — NOT that the object is framed, focused, or
-cloud-free. **Pull the actual image at least once per target, EARLY (~after 5–10 min),
-not only at the end.** The scope writes each OK sub as a JPG to the SMB share
-(`<IMAGE_ROOT>/<Target>_sub/Light_*_<IRCUT|LP>_*.jpg`; `_LP_` in the filename confirms the
-dual-band filter engaged, `_IRCUT_` = broadband). View the latest sub and confirm:
-- **The object is IN FRAME.** A modest off-centre offset (roughly frame-left) is a KNOWN
-  **systematic pointing offset (~20–30′)** on this unit — it does NOT come from a stale
-  alignment and a **power-cycle + fresh dark 3PPA does NOT fix it** (verified 2026-07-15/16:
-  the offset survived a restart, re-level, and fresh dark 3PPA). The pixel position varies
-  with sky angle (alt-az rotation smears the fixed angular error around the frame), so it is
-  benign for small/centred targets but can clip the halo of a large one. **If the object is
-  fully captured, just off-centre → accept it and keep imaging; do NOT burn a slot or a
-  power-cycle chasing a re-centre.** Only escalate if the object is genuinely cut off at an
-  edge. Flag the systematic offset for a firmware/optical calibration fix, not a re-align.
-  (Confirm framing cheaply from the live plate-solve annotation — `Stack.Annotate` gives the
-  object's centre `pixelx/pixely` and `radius` in the 1080×1920 frame — without pulling the JPG.)
-- **Stars are tight** (focus good) and the **background is clean** (no cloud haze).
+cloud-free. **Check the actual field at least once per target, EARLY (~5–10 min in), not
+only at the end.** The cheapest source is the live plate-solve annotation: `get_view_state`
+→ `Stack.Annotate` gives the object's centre `pixelx`/`pixely` and `radius` in the
+1080×1920 frame. Alternatively pull the newest sub JPG the scope writes to its share
+(`_LP_` in the filename confirms the dual-band filter engaged, `_IRCUT_` = broadband).
+Confirm three things: the object is **in frame**, stars are **tight** (focus good), and the
+background is **clean** (no cloud haze).
+
+**If the object is off-centre, classify the offset before reacting.** The frame centre is
+(540, 960); compare it against the annotated centre.
+
+| Evidence | Reading | Action |
+|---|---|---|
+| Offset **varies** between runs, or appeared after a bump, move, or travel | Alignment/level problem — **fixable** | Re-level, re-run a dark-sky alignment, and verify the site/time the scope is using |
+| Offset **persists across different sky angles** AND survives a power-cycle + re-level + fresh dark alignment | **Systematic** to that unit | Accept it while the object is fully captured; record it in the rig profile and stop re-testing it |
+| Object **cut off at a frame edge** | Framing failure, whatever the cause | Re-acquire; if it recurs at that sky angle, compose around it |
+
+Two captures at **different sky angles** are the minimum evidence for "systematic" — a
+single off-centre frame proves nothing, because alt-az rotation smears a fixed angular error
+around the frame as the target moves. Once classified as systematic, do not spend session
+time or power-cycles chasing a re-centre; note it and keep imaging. (For calibration: one
+reference S50 measured a ~20–30′ frame-left offset that persisted through a power-cycle,
+re-level, and fresh dark alignment.)
+
 For faint nebulae a single 10 s sub barely shows the object — that is normal; the
 accumulated stack reveals it. The check here is framing/focus/clouds, not depth.
 
@@ -169,20 +197,16 @@ the session run quietly.
 - At wind-down, always log the session to the project (`log_session_result`) so
   integration accumulates toward the goal across nights.
 
-## Field-tested notes (learned the hard way on the 2026-07-15/16 run)
-- **Do NOT run a heavy file transfer off the scope's SMB share during a session.** Pulling
-  images off the Seestar's EMMC share saturates the scope's Wi-Fi and starves its control
-  link — the seestar_alp bridge then fails to authenticate (`get_verify_str` times out,
-  "Seestar Alpha Connection Failed"). Pause any offload BEFORE imaging; resume it only after
-  wind-down. (Related: the scope may drop its SMB share when it sleeps after `park`, so finish
-  offloads while it's awake.)
+## Operating notes
+- **Do NOT run a heavy file transfer off the scope's share during a session.** Pulling images
+  off the scope saturates its Wi-Fi and starves the control link — the bridge then fails to
+  authenticate and the session stalls. Offload before the session or after wind-down.
+  (The scope may also drop its share when it sleeps after `park`, so finish offloads while it
+  is awake.)
 - **A target that drops EVERYTHING (0 stacked, drops climbing) is not automatically clouds.**
-  It is usually a **local obstruction** (roof/tree — the low NE is the worst offender here) or
-  a **drifting cloud bank**, not a global condition. Disambiguate: slew to a high target in a
-  **different** part of the sky. If it stacks clean → the first spot was locally blocked, skip
-  it and image elsewhere. If it also drops → it's global (dew / widespread cloud) → wind down.
-  Don't end the night on one bad patch of sky. Consider a horizon mask for the known roofline.
-- **`run_autofocus` may fail** with firmware "method not found" (the MCP's method name is out
-  of sync with firmware). The S50 auto-focuses during its boot sequence, so proceed on that
-  boot focus and confirm star tightness from the framing JPG — do NOT block the session on
-  autofocus. (Fix the method name in the MCP separately.)
+  It is usually a **local obstruction** (a low bearing over a roofline or tree line is the
+  usual offender) or a **drifting cloud bank**, not a global condition. Disambiguate: slew to
+  a high target in a **different** part of the sky. If it stacks clean → the first spot was
+  locally blocked, skip it and image elsewhere. If it also drops → it is global (dew /
+  widespread cloud) → wind down. Don't end the night on one bad patch of sky. A recurring
+  blocked bearing is what the learned horizon mask is for.
