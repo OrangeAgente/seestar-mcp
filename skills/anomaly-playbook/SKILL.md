@@ -62,6 +62,28 @@ False, or cloud cover rising in the forecast, while a session is live.
 - Pausing, winding down, and parking are all state-changing — **always ask first**; never
   auto-abort a session on weather.
 
+## Symptom: goto seems stuck (but may be a normal alignment)
+Likely cause: the normal `Initialise`/`3PPA` alignment the firmware runs on a goto, which
+takes minutes and includes its own autofocus — NOT a fault. This is the most common misread.
+- Judge by **progress, not elapsed time**: a healthy alignment shows plate-solves reaching
+  `complete`, the alignment percentage climbing, and the goto distance shrinking toward ~0.
+  Let it finish (~2–4 min).
+- Treat it as a real fault only when **all three** hold: >~4 min elapsed, **no** solve
+  progress (or repeated solve failures), and zero frames stacked. Then the field is
+  unsolvable — usually an obstruction at that bearing. Skip the target, and log it with
+  `log_sky_result(target=..., solved=False)` so the obstruction learner sees the evidence.
+
+## Symptom: bridge connects but authentication fails
+Likely causes: another client already holds the scope's single control channel (a phone app
+is the usual culprit); a heavy file transfer starving the link; a missing or wrong interop
+key on firmware 7.18+.
+- A **single** failed handshake at startup is not conclusive — the bridge retries on its
+  heartbeat and often authenticates seconds later. Watch for the retry before acting.
+- If it keeps failing: close the phone app completely, stop any transfer off the scope's
+  share, confirm the scope has finished booting, then restart the bridge.
+- If it started right after a firmware update, suspect the auth handshake; do not attempt to
+  patch it mid-session.
+
 ## Symptom: plate-solve fails
 Likely causes: bad pointing; thick cloud/poor transparency; focus far off (no stars to
 solve).
@@ -81,6 +103,10 @@ solve).
 
 ## Symptom: autofocus fails or returns implausible position
 Likely causes: too few stars (clouds/transparency); the target field is sparse; mechanical.
+- **First: focus is normally established during acquisition** (the alignment runs its own
+  autofocus), so a failing `run_autofocus` is not automatically a problem — see
+  `run-session` Phase 2. On some firmware the underlying device method is unavailable and
+  the call simply errors; that is not a focuser fault and must not block the session.
 - Retry `run_autofocus` once. If it fails again and star count is low → it's sky/field,
   not the focuser; advise waiting or slewing to a richer nearby field to focus, then
   returning. Surface to the user before improvising a slew.
@@ -95,7 +121,8 @@ Likely cause: temperature change (the dominant cause on the S50). Possibly early
   suspect dew, recommend the dew heater (with the dark-frame caveat).
 
 ## Symptom: connection dropped / tool calls failing
-Likely causes: WiFi instability (5 GHz is flaky on the S50 — 2.4 GHz is more stable);
+Likely causes: WiFi instability (if the link is unstable, try the 2.4 GHz band — it is often
+more robust at range);
 seestar_alp restarted; firmware auth handshake broke after an update.
 - Retry the call once. If the Alpaca layer is unreachable, the issue is seestar_alp or
   the network, not the scope — tell the user to check seestar_alp (:5555) and the
