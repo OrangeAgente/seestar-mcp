@@ -26,7 +26,7 @@ Suite state at review: **287 tests passing, ruff clean.** No secret is in git hi
 
 6. **Scrub personal data from tracked files** (privacy, not a secret leak):
    - `src/seestar_mcp/config.py:49` — comment hardcodes the real share `\\<seestar-ip>\EMMC Images\MyWorks` → replace with `\\<seestar-ip>\EMMC Images\MyWorks`.
-   - `README.md` (~lines 58, 247) — hardcode `C:/Users/<user>/SeeStar-AI` (leaks username) → `C:/path/to/SeeStar-AI`. Same path also appears in `CLAUDE.md` examples.
+   - `README.md` (~lines 58, 247) — hardcode `C:/Users/<user>/SeeStar-AI` (leaked a username) → `C:/path/to/SeeStar-AI`. Same path also appears in `CLAUDE.md` examples.
 
 7. **Document the SMB `EnableInsecureGuestLogons` relaxation.** The filesystem/UNC backend reads the Seestar share as an unauthenticated guest, which on modern Windows requires the machine-wide `Set-SmbClientConfiguration -EnableInsecureGuestLogons $true` — a real security downgrade (unauthenticated, unsigned guest SMB; rogue-server/MITM exposure). It is documented *nowhere*. Add to README/SECURITY: that it's required for the fs backend, the risk, the revert (`... $false`), and the safer alternatives (isolated IoT VLAN, or prefer the HTTP transport which needs no such change).
 

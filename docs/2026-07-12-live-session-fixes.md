@@ -9,7 +9,7 @@ operational lessons folded into the skills.
 Fixed on branch `fix/live-session-bugs-2026-07-12`; tests: 55 pass, ruff clean.
 
 ## The scope
-- Hardware: ZWO Seestar S50, firmware 7.75, alt-az, Bortle 8 (<city>).
+- Hardware: ZWO Seestar S50, firmware 7.75, alt-az, Bortle 8 (city site).
 - Driven via `seestar-mcp` MCP tools over the `seestar_alp` Alpaca bridge
   (`method_sync` tunnel, device number 1).
 

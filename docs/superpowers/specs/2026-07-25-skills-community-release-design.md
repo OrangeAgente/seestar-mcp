@@ -74,7 +74,7 @@ Every claim in a skill is sorted into one of three tiers, and each tier has one 
 |---|---|---|---|
 | **Universal** | True of every S50 on current firmware | alt-az field rotation; `park` strands pointing; never stack an unsolved field; goto runs 3PPA+autofocus | stated as fact in `SKILL.md` |
 | **Conditional** | Varies by rig / site / latitude | pointing offset; local obstructions; twilight length; Wi-Fi band | rewritten as a **diagnostic procedure**, never an assumed fact |
-| **Personal** | This unit's measured values | *this* ~20–30′ offset; *this* NE roofline; <city>'s dark window | moved **out** to a rig profile the skills optionally consult |
+| **Personal** | This unit's measured values | *this* ~20–30′ offset; *this* NE roofline; the reference site's dark window | moved **out** to a rig profile the skills optionally consult |
 
 This preserves the hard-won knowledge and upgrades it: a conclusion becomes the procedure
 that produced it, so any reader derives their own correct answer. Site obstructions already

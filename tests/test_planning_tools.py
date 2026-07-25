@@ -422,8 +422,9 @@ def test_plan_targets_location_mismatch_discloses(tmp_path, monkeypatch):
 
 def test_parse_gps_validated_firmware_schema():
     # HARDWARE-VALIDATED (fw 7.75): result.location_lon_lat is [lon, lat].
-    dev = {"result": {"location_lon_lat": [<lon>, <lat>], "device": {}}}
-    assert server_mod._parse_gps(dev) == (<lat>, <lon>)
+    # Coordinates below are synthetic — the test pins the [lon, lat] ORDER, not a place.
+    dev = {"result": {"location_lon_lat": [-12.3456, 65.4321], "device": {}}}
+    assert server_mod._parse_gps(dev) == (65.4321, -12.3456)
     # Fallback shapes still parse; junk fails safe to None.
     assert server_mod._parse_gps({"result": {"setting": {"lat": 10.0, "lon": 20.0}}}) == (10.0, 20.0)
     assert server_mod._parse_gps({"result": {"location_lon_lat": [None, 45.0]}}) is None

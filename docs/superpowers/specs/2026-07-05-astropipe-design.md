@@ -32,7 +32,7 @@ A new module `src/seestar_refine/pystack.py` providing a DSS-free stacking backe
 
 - Seestar light subs: raw 2-D Bayer, `1920×1080` uint16, **`BAYERPAT = GRBG`** (from the FITS header), 10 s, gain 80.
 - DSS master output: `(3, 1920, 1080)` float32 RGB cube — the shape/format to match.
-- ~286 QA-passed M27 subs available locally at `C:\Users\<user>\seestar_subs\M27_sub`.
+- ~286 QA-passed M27 subs available locally at `<local-subs-dir>/M27_sub`.
 
 ### Units (each pure, NaN/inf-safe, never-raising)
 
