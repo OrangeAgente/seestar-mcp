@@ -35,6 +35,10 @@ autonomous-night     orchestrates all four for a whole unattended night
 Each skill defers rather than duplicates, so install them together — used alone they will
 reference guidance that isn't there.
 
+**Not part of this bundle:** the repo also ships `image-refinement` and `astro-processing`
+skills for stacking and post-processing finished images. They need extra software
+(DeepSkyStacker, optionally PixInsight) and are not required to run an observing night.
+
 ## Prerequisites
 
 1. **`seestar-mcp` registered in Claude Code** (stdio transport, no network port):

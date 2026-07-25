@@ -33,15 +33,28 @@ silently stopped.
   state; if tracking stopped, re-issue goto + plate_solve to recover. Surface to user.
 
 ## Symptom: rejection rate spiking
-Likely causes: field rotation (Alt-Az, late session) — EXPECTED; dew on the lens; wind;
-tracking error.
-- If Alt-Az and >~15 min in → field rotation. Expected. Note it, do not "fix" it. Subs
-  will be auto-rejected; the usable integration is what survives. Mention EQ mode as the
-  structural fix for next time.
-- If early in session or in EQ mode → check eccentricity trend (qa_tier2). High
-  eccentricity = tracking/wind. Sudden onset with rising FWHM = dew. For dew, recommend
-  the dew heater (note it invalidates existing darks — re-enhancement needed). For wind,
-  suggest waiting for a lull.
+Likely causes: field rotation (alt-az); dew on the optics; wind; tracking error.
+
+**Classify by the metric signature, not by how long the session has been running.** Rotation
+onset is not a fixed clock — it depends on where the target sits, being worst near the
+zenith and far slower at low declination. A well-chosen sweet-band target can run a long
+slot with no rotation rejects at all, while a near-zenith one trails within minutes. Never
+attribute rejections to rotation on elapsed time alone.
+
+- **Eccentricity/elongation rising, FWHM roughly stable** → field rotation (alt-az) or a
+  tracking error. If the target is high or near transit, rotation is the likely cause:
+  expected, note it, do not "fix" it — the usable integration is what survives, and EQ mode
+  (wedge + polar align) is the structural fix for next time. Check the target against its
+  sweet band; moving to a target further from the zenith helps immediately.
+- **FWHM rising while stars stay round** → dew on the optics, or focus drift — NOT rotation.
+  This is **correctable and can begin at any point in a session**, so never dismiss it as
+  "expected". Recommend the dew heater (note it invalidates existing darks — re-enhancement
+  needed) and consider a refocus.
+- **Isolated eccentricity bursts on a few subs** → a wind gust or momentary tracking error.
+  Reject those subs; the session is otherwise fine. For sustained wind, suggest waiting for
+  a lull.
+- **Star count and SNR falling together** → transparency or cloud, not a mount or optics
+  problem. Use the clouds branch above.
 
 ## Symptom: incoming clouds / weather no-go
 Likely trigger: the run-session conditions watch reports `assess_conditions.go` flipping
@@ -121,8 +134,8 @@ Likely cause: temperature change (the dominant cause on the S50). Possibly early
   suspect dew, recommend the dew heater (with the dark-frame caveat).
 
 ## Symptom: connection dropped / tool calls failing
-Likely causes: WiFi instability (if the link is unstable, try the 2.4 GHz band — it is often
-more robust at range);
+Likely causes: WiFi instability (try switching bands — 2.4 GHz usually reaches farther,
+while 5 GHz is cleaner where 2.4 GHz is congested);
 seestar_alp restarted; firmware auth handshake broke after an update.
 - Retry the call once. If the Alpaca layer is unreachable, the issue is seestar_alp or
   the network, not the scope — tell the user to check seestar_alp (:5555) and the
