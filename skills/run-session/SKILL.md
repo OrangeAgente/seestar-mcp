@@ -123,7 +123,10 @@ first few minutes and after any focus event. On each poll, report a compact stat
 Watch these signals and route faults to the anomaly-playbook skill rather than
 diagnosing inline:
 - Stacking count flat across two polls → clouds / tracking loss.
-- Rejected count climbing fast → trailing (expected late in Alt-Az), dew, or wind.
+- Rejected count climbing fast → check the *signature* before blaming rotation: eccentricity
+  rising with FWHM stable = trailing (rotation or tracking; worst near the zenith), while
+  FWHM rising with round stars = dew or focus drift, which is correctable at any point in the
+  session. Route to anomaly-playbook.
 - Focus drifting from baseline → temperature change; consider a mid-session refocus.
 - Plate-solve dropping out → pointing / transparency.
 
@@ -208,7 +211,9 @@ the session run quietly.
 - Never start stacking on a failed plate-solve.
 - Never claim data is "good" without Tier-2 numbers; Tier-1 telemetry is a health
   signal, not a quality verdict.
-- Treat late-session Alt-Az rejection as expected; do not raise it as a fault.
+- Treat Alt-Az rotation trailing — eccentricity rising while FWHM holds, worst near the
+  zenith — as expected; do not raise it as a fault. Never dismiss *rising FWHM with round
+  stars* that way: that is dew or focus, and it is correctable.
 - Confirm each motion command's success before issuing the next.
 - At wind-down, always log the session to the project (`log_session_result`) so
   integration accumulates toward the goal across nights.
