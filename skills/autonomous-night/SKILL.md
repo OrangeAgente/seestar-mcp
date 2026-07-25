@@ -36,7 +36,14 @@ and park (fail safe).**
 1. `simulate_night` (optionally pass `types` / `limit` if the user asked). This is a
    **dry run — it issues NO motion.** It returns the conditions verdict, the dark
    window, and the ordered projected schedule.
-2. Present, compactly:
+2. **Reconcile the schedule against the CURRENT time.** `simulate_night` packs from the
+   start of the dark window, not from now — so if the night is already underway (the common
+   case), its early slots are already in the past and the list is not runnable as returned.
+   Drop the slots that have passed and re-pack the remainder from the current time, so you
+   present **only what can actually be observed tonight**. Say it in one line, e.g.
+   `Dark started 22:57; it's now 00:06 — first two slots already past. Runnable remainder:`
+   Never hand the user a schedule whose first target's window has already closed.
+3. Present, compactly:
    - the **one-line conditions verdict** (from `simulate_night`'s `conditions`);
    - the **ordered schedule** — per `ScheduledTarget`, one line: name · window (UTC) ·
      minutes · `subs × 10s` · the one-line reason, e.g.
@@ -46,12 +53,12 @@ and park (fail safe).**
    - a note that **each target spends ~2–4 min acquiring** (alignment + autofocus) before
      its first frame stacks, so a 45-min slot yields roughly 42 min of integration. Do not
      promise the full slot as integration time.
-3. **State plainly that this is a dry run and REQUIRE explicit user confirmation before
+4. **State plainly that this is a dry run and REQUIRE explicit user confirmation before
    ANY motion command.** Say it in one line, e.g.
    `Dry run only — nothing has moved. Reply "go" to start the run; I'll park at dawn or on any hard stop.`
    This confirmation gate is **mandatory and non-skippable.** Do not slew, focus, stack,
    or otherwise command motion until the user explicitly says to begin.
-4. If conditions are **no-go** (`simulate_night` returns `ok:false`, an empty schedule,
+5. If conditions are **no-go** (`simulate_night` returns `ok:false`, an empty schedule,
    or a no-go verdict), say so in one line and **do not start.** Offer to re-simulate
    later or for a clearing window, but issue no motion.
 
@@ -82,6 +89,18 @@ Record the run's `session_start_utc` at first go-ahead. Then, for each target:
    **`run-session`** skill: goto → plate-solve → focus → stack → monitor (the `qa_tier1`
    cadence plus the Phase 4 live reactivity — conditions watch and sweet-band watch).
    Notify the user of the target change in one line.
+   - **The approved plan is an authorization, not a blank cheque.** The user approved *that
+     schedule*. Running it as-is needs no further confirmation, but any **material
+     deviation** — skipping a target, substituting one that was not in the dry run,
+     reordering, or materially extending a slot — must be **surfaced in one line as it
+     happens**, with the reason. Skipping an obstructed target and moving on is fine and
+     expected; doing it silently is not. Anything that would take the night somewhere the
+     user did not see in the dry run (a target off-plan, the dew heater, a mask edit) needs
+     a fresh confirmation.
+   - **When a target is blocked, check its neighbours before slewing.** A local obstruction
+     is a *direction*, not a single target: before taking the next item, scan the remaining
+     plan for targets at similar azimuth and **lower** altitude and skip them together.
+     Discovering the same roofline one slew at a time can waste most of an hour.
 3. **End the target's slot** when any of these happen: its scheduled window ends, it
    leaves its sweet band (nearing the field-rotation ceiling or the altitude floor), or
    QA collapses. Then call `log_session_result(...)` for it (integration, sub counts,
@@ -162,7 +181,12 @@ Non-obvious behaviors that cost real observing time when ignored.
   the night on one clouded patch.
 - **Pacing a long slot.** A 45-minute slot does not need minute-by-minute polling, and tight
   loops cost more than they reveal. Sample the stack counters on a slow cadence (~1 min) and
-  watch for three exit conditions: the **slot boundary**, a **drop-spike** (dropped frames
+  watch for four exit conditions: the **slot boundary**, a **drop-spike** (dropped frames
   climbing sharply across consecutive samples — a cloud bank or something drifting into the
-  light path), or a **link fault** (repeated solve failures or connection errors). Any of
-  those warrants a decision; between them, stay quiet.
+  light path), a **link fault** (repeated solve failures or connection errors), or a
+  **guardrail stop**. Any of those warrants a decision; between them, stay quiet.
+- **Guardrails inside the slot, not just between targets.** Re-run
+  `check_night_guardrails` on a slow cadence (~10 min) *during* a slot as well as at each
+  boundary. Weather, dew, and battery do not wait for a slot to end, and a 45-minute slot
+  checked only at its edges is 45 minutes unguarded — which defeats the lead time the
+  predictive stops exist to give you.

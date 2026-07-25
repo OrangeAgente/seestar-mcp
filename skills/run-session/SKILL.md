@@ -29,7 +29,18 @@ tools. Follow the phases in order. Do not skip pre-flight. Treat every motion co
 
 ## Phase 0 — Pre-flight (always run before goto)
 1. `get_status` — confirm the mount is connected and not already slewing. If not
-   connected, `connect_telescope` first.
+   connected, `connect_telescope` first. **If both fail, work out WHICH link is down before
+   touching anything** — they need opposite fixes and this is the most common first-run
+   failure:
+   - **Transport error / "all connection attempts failed" / connection refused** → the
+     *bridge* is not running or not reachable. The scope is not the problem. Start
+     `seestar_alp`, wait for it to finish connecting (it can take a minute and may log one
+     failed handshake before a retry succeeds), then retry.
+   - **Bridge answers but device calls error** (e.g. "not connected", auth failures) → the
+     bridge is up and the *scope* is the problem: still booting, asleep, off the network, or
+     the firmware-7.18+ handshake failed. See the authentication branch in
+     **`anomaly-playbook`**.
+   Never report "the telescope is offline" when it is actually the bridge that is down.
 2. `get_view_state` — confirm no session is already in progress. If one is, ask the
    user whether to stop it (`stop_view`) before starting a new target.
 3. Confirm thermal/dark readiness: the S50 builds darks at startup and they are
@@ -130,10 +141,18 @@ diagnosing inline:
 - Focus drifting from baseline → temperature change; consider a mid-session refocus.
 - Plate-solve dropping out → pointing / transparency.
 
-Run `qa_tier2` opportunistically (e.g. once enough new subs exist, or when Tier-1
-shows something marginal) to get real per-sub FWHM/eccentricity/SNR. Apply the
-qa-policy skill to interpret the numbers and decide keep/marginal/reject. Do not
-invent thresholds here — qa-policy owns them.
+**Tier-2 is a POST-session activity, not part of this loop.** `qa_tier2` scores FITS files in
+the **local** data directory, so it needs `download_subs` to have run first — and pulling
+files off the scope mid-session is exactly what starves the control link (see Operating
+notes). So during a session you have Tier-1 telemetry only: treat it as a **health** signal
+that tells you whether to keep going, intervene, or stop. Real per-sub FWHM/eccentricity/SNR
+arrive at wind-down (Phase 5), where `qa_tier2` / `qa_session_report` run against the
+downloaded subs and the **qa-policy** skill interprets them.
+
+If you genuinely need numbers mid-session (e.g. deciding whether to abandon a target), that
+requires an explicit pause: stop the stack, download a sample, score it, then resume — say so
+and let the user decide, because it costs imaging time and briefly loads the link. Do not do
+it silently mid-slot.
 
 ### Live reactivity (runs alongside the `qa_tier1` loop)
 Alongside the fast Tier-1 polling, keep two slow watches. Keep every message here
@@ -142,6 +161,11 @@ compact and phone-friendly — one line, lead with state.
   flips to False across **two consecutive** slow polls, route to the **`anomaly-playbook`**
   skill (incoming clouds / weather no-go branch) — do not act on a single flip, and do not
   diagnose weather inline.
+- **Guardrail watch (unattended runs, same ~10 min cadence):** call
+  `check_night_guardrails`. A target slot can run 45+ minutes, and precipitation, dew, or a
+  falling battery do not wait for a slot boundary — checking only between targets leaves the
+  whole slot unguarded. A `park_and_stop` verdict wins immediately: end the slot and wind
+  down (see `autonomous-night` Phase C).
 - **Sweet-band watch:** track where the current target sits in its window. When it leaves
   its sweet band — crossing the field-rotation ceiling on the way down, or dropping toward
   the altitude floor / into the horizon mask — tell the user in one line and offer the next
@@ -210,7 +234,9 @@ the session run quietly.
 ## Hard rules
 - Never start stacking on a failed plate-solve.
 - Never claim data is "good" without Tier-2 numbers; Tier-1 telemetry is a health
-  signal, not a quality verdict.
+  signal, not a quality verdict. Those numbers only exist **after** the subs are downloaded
+  at wind-down — so during a session, report health and say the quality verdict is pending;
+  don't imply you know it yet.
 - Treat Alt-Az rotation trailing — eccentricity rising while FWHM holds, worst near the
   zenith — as expected; do not raise it as a fault. Never dismiss *rising FWHM with round
   stars* that way: that is dew or focus, and it is correctable.
