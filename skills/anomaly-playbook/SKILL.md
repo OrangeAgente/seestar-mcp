@@ -143,7 +143,10 @@ seestar_alp restarted; firmware auth handshake broke after an update.
   auth handshake broke; the auth/command-map module needs updating (do not attempt to
   patch it mid-session).
 - Remote Control note: if the USER's app connection drops, the local session keeps
-  running on the Jetson — reassure them the session is intact; reconnect from the app.
+  running **only if the machine running Claude Code stays awake** (a dedicated always-on host
+  near the scope). Confirm that before reassuring anyone: on a laptop that sleeps or
+  hibernates, the session dies with it and an unattended run stops mid-night with the mount
+  still tracking. Say which case applies rather than giving blanket reassurance.
 
 ## Symptom: sudden quality collapse in QA (FWHM/eccentricity jump, SNR/star-count drop)
 - Use the qa-policy skill's pattern table to attribute the cause (focus vs clouds vs
