@@ -82,6 +82,11 @@ phone-friendly (Remote Control): lead with the verdict, then the top 3.
 6. **Moon / dew.** If the conditions or a plan flag a bright, close moon or high dew
    risk, mention it once per relevant target — it is a data-quality heads-up, not a
    veto.
+7. **Latitude caveat.** At high latitude in summer, astronomical dark can be short or
+   absent — the tools return the real dark window, so quote it rather than assuming a full
+   night. When dark time is scarce, sequence **broadband** targets (galaxies, clusters) into
+   the true dark and **emission/dual-band** targets into twilight, which they tolerate far
+   better.
 
 ## Phase 2 — Hand off
 - Once the user picks a target, hand execution to the **`run-session`** skill

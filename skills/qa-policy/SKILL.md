@@ -82,8 +82,9 @@ The report aggregates per-sub verdicts plus session trends. When summarizing it:
 1. Lead with the headline: kept N of M subs, total kept integration time, median wFWHM.
 2. State the dominant rejection cause (the most common REJECT trigger).
 3. Note any session-level pattern from the list above and its likely cause.
-4. Point to the keep-list path for re-stacking (the kept subs feed a Siril re-stack with
-   OSC_Preprocessing_WithoutDBF.ssf, since Seestar subs are already calibrated).
+4. Point to the keep-list path for re-stacking. The kept subs are what a stacker should
+   consume — Seestar subs arrive already calibrated, so no separate darks/flats step is
+   needed. Hand off to the `image-refinement` skill, which owns backend choice.
 Keep it to a few lines unless the user asks for the full per-sub breakdown.
 
 ## Hard rules
