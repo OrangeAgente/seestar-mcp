@@ -80,7 +80,7 @@ Record the run's `session_start_utc` at first go-ahead. Then, for each target:
    targets.**
 2. Otherwise take the **next `ScheduledTarget`** from the schedule and hand it to the
    **`run-session`** skill: goto → plate-solve → focus → stack → monitor (the `qa_tier1`
-   cadence plus the Phase-2 live reactivity — conditions watch and sweet-band watch).
+   cadence plus the Phase 4 live reactivity — conditions watch and sweet-band watch).
    Notify the user of the target change in one line.
 3. **End the target's slot** when any of these happen: its scheduled window ends, it
    leaves its sweet band (nearing the field-rotation ceiling or the altitude floor), or

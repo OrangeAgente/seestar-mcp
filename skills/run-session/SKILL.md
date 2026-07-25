@@ -18,7 +18,9 @@ tools. Follow the phases in order. Do not skip pre-flight. Treat every motion co
 
 ## Operating assumptions
 - `seestar-mcp` is already registered and the Claude Code session is running on the
-  Jetson. seestar_alp is up on :5555 and the Seestar is on a stable LAN IP.
+  host near the scope (a small always-on machine is ideal for unattended runs; a laptop that
+  sleeps will kill the session). seestar_alp is up on :5555 and the Seestar is on a stable
+  LAN IP.
 - The user is typically monitoring from the Claude phone app via Remote Control, so
   keep status messages compact and scannable on a small screen. Lead with state, not
   prose. One-line status beats a paragraph.
