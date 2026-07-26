@@ -39,9 +39,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/OrangeAgente/SeeStar-AI"
-Repository = "https://github.com/OrangeAgente/SeeStar-AI"
-Issues = "https://github.com/OrangeAgente/SeeStar-AI/issues"
+Homepage = "https://github.com/OrangeAgente/seestar-mcp"
+Repository = "https://github.com/OrangeAgente/seestar-mcp"
+Issues = "https://github.com/OrangeAgente/seestar-mcp/issues"
 
 [dependency-groups]
 dev = [
