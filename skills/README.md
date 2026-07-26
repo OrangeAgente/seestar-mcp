@@ -97,7 +97,7 @@ take a minute, and it may log one failed handshake before a retry succeeds.
 ### 3. This repo
 
 ```bash
-git clone https://github.com/OrangeAgente/SeeStar-AI
+git clone https://github.com/OrangeAgente/seestar-mcp
 cd SeeStar-AI
 uv sync
 ```
