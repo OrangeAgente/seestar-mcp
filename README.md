@@ -8,14 +8,14 @@ pulls RAW FITS subs off the device, and scores them with a two-tier QA pipeline.
 built for high-assurance / air-gapped-adjacent operation: every tool call is written to an
 append-only provenance log, dependencies are hash-pinned, and the daemon runs sandboxed and
 least-privilege. It is designed to run 24/7 on an **NVIDIA Jetson** host and is driven from
-the **Claude phone app via Claude Code Remote Control** — the Jetson is the brain; the phone
+the **Claude phone app via Claude Code Remote Control**. The Jetson is the brain; the phone
 is just a window into the local session.
 
 ## Status & limitations
 
-**Alpha (0.1.0).** The core has been exercised against real hardware — a full live M27
+**Alpha (0.1.0).** The core has been exercised against real hardware (a full live M27
 session end-to-end (goto → autofocus → plate-solve → stack → park) and a 766-sub M31 deep
-stack through DeepSkyStacker — but several code paths are **not yet hardware-validated** and
+stack through DeepSkyStacker), but several code paths are **not yet hardware-validated** and
 are flagged `# FIRMWARE-DEPENDENT` in the source (single, well-marked update points):
 
 - the GPS key in `_parse_gps` and the battery key in `_parse_device_health`;
@@ -33,17 +33,17 @@ excise the sheared border on a smooth sky (a coverage-map crop is a future enhan
 - **[`seestar_alp`](https://github.com/smart-underworld/seestar_alp)** running and reachable
   at `http://127.0.0.1:5555` (it owns the device handshake; GPL-3.0, installed separately).
 - A **user-supplied firmware interop key** for Seestar firmware 7.18+ (you extract it from
-  your own licensed ZWO app under 17 U.S.C. §1201(f); this project ships none — see
+  your own licensed ZWO app under 17 U.S.C. §1201(f); this project ships none. See
   [Legal & trademarks](#legal--trademarks)).
 - **[DeepSkyStacker](https://deepskystacker.free.fr)** (`DeepSkyStackerCL`) on the processing
   host for the `seestar-refine` service.
 - *Optional:* **PixInsight** + the external
   **[`pixinsight-mcp`](https://github.com/aescaffre/pixinsight-mcp)** for the full-finish path.
 - *Optional (hands-free data pull):* the SMB/filesystem backend requires a **machine-wide
-  Windows SMB relaxation** — see the caveat under [Configuration](#configuration) and
+  Windows SMB relaxation**. See the caveat under [Configuration](#configuration) and
   [`SECURITY.md`](SECURITY.md#data-access-the-smb--filesystem-backend-host-wide-caveat).
 
-## Operating model — Remote Control
+## Operating model: Remote Control
 
 The phone never touches your LAN. It reaches the local Claude Code session only through
 Anthropic's API; the Jetson reaches the Seestar over the LAN. This changes the security
@@ -63,13 +63,13 @@ See [`SECURITY.md`](SECURITY.md) for the full threat model and OWASP MCP Top 10 
 
 ## Startup order (order matters)
 
-1. **On the Jetson: ensure `seestar_alp` is running** — its ASCOM Alpaca server must be up
+1. **On the Jetson: ensure `seestar_alp` is running**: its ASCOM Alpaca server must be up
    on `http://127.0.0.1:5555` (bound to localhost/LAN, never public).
-2. **Register `seestar-mcp` in Claude Code** (stdio; no network port — see the exact line
+2. **Register `seestar-mcp` in Claude Code** (stdio; no network port; see the exact line
    below).
-3. **Start the Claude Code session and enable Remote Control** — run `claude`, then
+3. **Start the Claude Code session and enable Remote Control**: run `claude`, then
    `/remote-control "Seestar"`, and pair the app via the QR code / URL once.
-4. **Drive the session from the Claude app** — kick off a session, monitor stacking/QA, and
+4. **Drive the session from the Claude app**: kick off a session, monitor stacking/QA, and
    approve motion / destructive actions as they are surfaced.
 
 Because MCP cannot be added mid-session, treat "register before start" (steps 2 → 3) as a
@@ -77,7 +77,7 @@ hard sequence.
 
 ### Exact register line
 
-The server speaks MCP over **stdio** — no network port is opened. Register it with:
+The server speaks MCP over **stdio**, so no network port is opened. Register it with:
 
 ```bash
 # Linux / Jetson (the production host)
@@ -96,7 +96,7 @@ To run both the `seestar_alp` bridge and this server in Docker instead of on the
 [`deploy/docker/README-docker.md`](deploy/docker/README-docker.md). A `docker compose` stack runs the
 bridge long-lived while Claude Code launches the stdio MCP server as an on-demand container that
 reaches the bridge at `http://seestar-alp:5555`. In that stack the bridge's **SSC web UI is on `5544`,
-not `5432`** — moved to avoid colliding with a postgres backend on the same host.
+not `5432`**, moved to avoid colliding with a postgres backend on the same host.
 
 ## Install / dev
 
@@ -107,7 +107,7 @@ make run    # or: uv run python -m seestar_mcp.server   # launch the MCP server 
 make lint   # or: uv run ruff check src tests
 ```
 
-Never invoke a bare `python` — always go through `uv run` so the locked environment is used.
+Never invoke a bare `python`; always go through `uv run` so the locked environment is used.
 
 ## Configuration
 
@@ -142,13 +142,13 @@ QA thresholds (all `SEESTAR_QA_*`, see `config.py`) include the scattered-light 
 (`SEESTAR_QA_SCATTER_REJECT_SIGMA`, `SEESTAR_QA_SCATTER_MARGINAL_SIGMA`,
 `SEESTAR_QA_SCATTER_ABSOLUTE`) alongside FWHM / eccentricity / SNR / star-count.
 
-> **⚠️ Hands-free data pull (SMB) — host-wide caveat.** Setting `SEESTAR_SEESTAR_IMAGE_ROOT`
+> **⚠️ Hands-free data pull (SMB): host-wide caveat.** Setting `SEESTAR_SEESTAR_IMAGE_ROOT`
 > to the Seestar's UNC share (e.g. `\\<seestar-ip>\EMMC Images\MyWorks`) lets `list_subs` /
 > `download_subs` read subs directly off the device with no mapped drive. But the Seestar
 > serves that share as an **unauthenticated guest**, which modern Windows blocks by default;
 > enabling it needs an **elevated, machine-wide** `Set-SmbClientConfiguration
 > -EnableInsecureGuestLogons $true` (revert with `$false`). This re-enables unsigned guest
-> SMB for the **whole machine** — a real security downgrade. Prefer the default HTTP transport
+> SMB for the **whole machine**, a real security downgrade. Prefer the default HTTP transport
 > (no such change), keep the scope on an isolated VLAN if you do enable it, and revert when
 > done. Full detail in [`SECURITY.md`](SECURITY.md#data-access-the-smb--filesystem-backend-host-wide-caveat).
 
@@ -207,7 +207,7 @@ weather). Read-only except `set_site_profile`, which writes the site profile.
 | `simulate_night` | Dry-run tonight's autonomous plan (ordered target schedule) WITHOUT moving the scope. Read-only. |
 | `check_night_guardrails` | Evaluate hard-stop conditions for an autonomous run (dawn, battery, weather, connection, max duration). Read-only. |
 | `log_sky_result` | Record one plate-solve outcome, binned by (az, alt); weather-gated so cloudy failures never count as obstructions. |
-| `suggest_horizon_mask` | Return learned obstruction arcs with evidence (nights, failure rate) for review. **Read-only — suggests, never applies.** |
+| `suggest_horizon_mask` | Return learned obstruction arcs with evidence (nights, failure rate) for review. **Read-only: suggests, never applies.** |
 | `add_horizon_mask` | Append one user-confirmed obstruction arc to the site profile's horizon mask (explicit user action). |
 
 ### Projects / history
@@ -230,7 +230,7 @@ Set a site profile once (`set_site_profile` with your lat/lon and, if you know i
 Bortle), then ask to plan a night. `assess_conditions` gives a one-line go/no-go from
 weather + moon + twilight, and `plan_targets` returns a ranked shortlist optimized for
 *clean* alt-az data (field-rotation sweet-band time, light-pollution fit, moon
-separation, FOV framing) — every score is reason-tagged. With no profile, the tools
+separation, FOV framing), and every score is reason-tagged. With no profile, the tools
 fall back to the scope's GPS and a default Bortle. Weather is the only external call
 (`api.open-meteo.com`, keyless) and a failure is non-fatal. The **`observing-planner`**
 skill drives this flow and hands the chosen target to `run-session`.
@@ -245,12 +245,12 @@ at wind-down.
 
 The horizon mask is **learned-and-confirmed**, not just hand-declared. `log_sky_result`
 accumulates plate-solve outcomes binned by (azimuth, altitude) across nights, and
-`suggest_horizon_mask` proposes obstruction arcs — but only when the evidence is
+`suggest_horizon_mask` proposes obstruction arcs, but only when the evidence is
 unambiguous: **weather-gated** (cloudy-sky failures are excluded), **cross-night** (a
 bearing must fail on several distinct clear nights), **low-altitude** (obstructions are
 near the horizon; a high blank is never a tree), and **GPS-checked** (records and the mask
 are scoped to the site where they were recorded). It is **suggest-and-confirm**: the mask
-is **never auto-applied** — the user reviews the evidence and confirms each arc via
+is **never auto-applied**; the user reviews the evidence and confirms each arc via
 `add_horizon_mask`. Every plan (`plan_targets` / `assess_conditions` / `simulate_night`)
 returns a `location` block reconciling the scope's live GPS with the saved site; if the
 scope has moved beyond tolerance the stale mask is **not applied** and the mismatch is
@@ -259,19 +259,19 @@ disclosed.
 ## Autonomous night
 
 An **opt-in** unattended mode: hand over the whole night and let Claude run the ranked plan
-target-by-target, react to conditions/QA, and park at dawn. It is **dry-run-first** —
+target-by-target, react to conditions/QA, and park at dawn. It is **dry-run-first**:
 `simulate_night` projects the ordered schedule with **no motion**, and an **explicit user
-confirmation is required before the first motion command**. It is **guardrailed** —
+confirmation is required before the first motion command**. It is **guardrailed**:
 `check_night_guardrails` is evaluated every loop iteration and any hard stop (dawn, low
 battery, weather no-go, lost connection, max duration) **always ends in `park`**; if the
 scope's health can't be confirmed, the run stops (fail safe). Autonomy adds no new network
-host or inbound surface — it is the same audited tools driven in a visible loop. The
+host or inbound surface; it is the same audited tools driven in a visible loop. The
 **`autonomous-night`** skill drives this flow (planning from `observing-planner`, execution
 from `run-session`, faults from `anomaly-playbook`).
 
 ## Image refinement (`seestar-refine`)
 
-Refinement runs as a **separate MCP service** in this repo — `seestar-refine` — on the
+Refinement runs as a **separate MCP service** in this repo, `seestar-refine`, on the
 processing machine (the Windows / RTX-4090 box, where DeepSkyStacker and, optionally,
 PixInsight are installed). It takes the QA **keep-list** (from `qa_session_report`) and
 turns it into a finished image. It is a distinct concern with external desktop-app
@@ -279,22 +279,22 @@ dependencies, so it is its own FastMCP server, registered separately from `seest
 
 Three stacking backends, chosen by availability and the user's wish:
 
-- **DeepSkyStacker (DSS)** — registers + integrates the keep-list into a master and an
+- **DeepSkyStacker (DSS)**: registers + integrates the keep-list into a master and an
   auto-stretched PNG preview. Complete on its own (when DSS is installed).
-- **pystack** — a **pure-Python, DSS-free** backend (`astroalign` + numpy): debayer →
+- **pystack**: a **pure-Python, DSS-free** backend (`astroalign` + numpy): debayer →
   star-triangle registration → memmap-bounded sigma-clipped integration → `(3,H,W)`
   master. **Cross-platform, no external app, and visually equivalent to DSS** on Seestar
   data (validated on 286 real M27 subs). Use `engine="pystack"`.
-- **PixInsight** — the **optional full finish** (only if installed): stack via WBPP,
+- **PixInsight**: the **optional full finish** (only if installed): stack via WBPP,
   then hand the master to the user's **external
   [`pixinsight-mcp`](https://github.com/aescaffre/pixinsight-mcp)** server for its
   quality-gated creative processing. That server is the user's own install
-  (macOS-tested; Windows unverified) — this repo drives it if reachable, it does not
+  (macOS-tested; Windows unverified). This repo drives it if reachable, it does not
   vendor it.
 
 ### Register line
 
-Like `seestar-mcp`, it speaks MCP over **stdio** — no network port. Register it on the
+Like `seestar-mcp`, it speaks MCP over **stdio**, with no network port. Register it on the
 processing host **before** starting the Claude Code session:
 
 ```bash
@@ -304,7 +304,7 @@ claude mcp add seestar-refine -- uv --directory C:/path/to/SeeStar-AI run python
 ### Configuration
 
 All settings are overridable via environment variables with the `SEESTAR_REFINE_`
-prefix. It holds **no secrets** — only non-sensitive desktop-app paths and directories.
+prefix. It holds **no secrets**, only non-sensitive desktop-app paths and directories.
 
 | Env var | Default | Purpose |
 |---|---|---|
@@ -332,20 +332,20 @@ DSS gives a **master + preview**; PixInsight is an **optional full finish** done
 user's external `pixinsight-mcp`. The **`image-refinement`** skill orchestrates the flow
 (keep-list only, backend + params stated, fallback if a backend is unreachable).
 
-### AstroPipe — the pure-Python pipeline (no DSS/PixInsight required)
+### AstroPipe: the pure-Python pipeline (no DSS/PixInsight required)
 
 A DSS/PixInsight-free path built on the scientific-Python stack, exposed through
 `stack_keep_list(engine="pystack")` + `stretch_master(params=…)`:
 
-1. **Stack** (`pystack`) — debayer (GRBG) → `astroalign` registration → memmap-bounded
+1. **Stack** (`pystack`): debayer (GRBG) → `astroalign` registration → memmap-bounded
    sigma-clipped integration → `(3,H,W)` master. Validated visually equivalent to DSS.
-2. **Gradient removal** — star-masked `photutils.Background2D` sky subtraction.
-3. **Color calibration** — star-based white balance (neutral star color).
-4. **Stretch** — percentile-white-point MTF (raise the black point on low-SNR data).
-5. **Deconvolution** — gentle Richardson-Lucy (honest detail recovery; keep it light —
+2. **Gradient removal**: star-masked `photutils.Background2D` sky subtraction.
+3. **Color calibration**: star-based white balance (neutral star color).
+4. **Stretch**: percentile-white-point MTF (raise the black point on low-SNR data).
+5. **Deconvolution**: gentle Richardson-Lucy (honest detail recovery; keep it light:
    aggressive settings ring around bright stars).
-6. **Saturation** — chroma boost to match references.
-7. **Upscale** *(opt-in)* — Lanczos by default ("no new detail"); an optional AI path is
+6. **Saturation**: chroma boost to match references.
+7. **Upscale** *(opt-in)*: Lanczos by default ("no new detail"); an optional AI path is
    **provenance-labeled "AI-generated detail, not captured signal."**
 
 Every stage is opt-in via `stretch_master` params and provenance-logged. The whole thing
@@ -357,21 +357,21 @@ runs cross-platform with no external desktop app.
 ability to reach the telescope, the FITS files, and the QA computations; the Skills encode
 *how* to use them:
 
-- **`run-session`** — the end-to-end session run-book (pre-flight, acquire, focus, stack,
+- **`run-session`**: the end-to-end session run-book (pre-flight, acquire, focus, stack,
   monitor, wind down).
-- **`qa-policy`** — the scoring policy: what the QA metrics mean (FWHM, HFR, eccentricity,
-  SNR, background, star count, wFWHM, and `scattered_light` — a bright-star-halo /
+- **`qa-policy`**: the scoring policy: what the QA metrics mean (FWHM, HFR, eccentricity,
+  SNR, background, star count, wFWHM, and `scattered_light`, a bright-star-halo /
   background-non-uniformity metric that catches thin-cirrus veils slipping the SNR/star-count
   floors) and how to decide PASS / MARGINAL / REJECT.
-- **`anomaly-playbook`** — the fault decision tree (clouds, dew, focus drift, tracking loss,
+- **`anomaly-playbook`**: the fault decision tree (clouds, dew, focus drift, tracking loss,
   connection drops).
-- **`observing-planner`** — the pre-session planner: a go/no-go conditions verdict and a
+- **`observing-planner`**: the pre-session planner: a go/no-go conditions verdict and a
   ranked, reasoned target shortlist (best window + recommended integration), then hands the
   chosen target to `run-session`.
-- **`autonomous-night`** — the unattended full-night run-book: propose a no-motion plan
+- **`autonomous-night`**: the unattended full-night run-book: propose a no-motion plan
   (`simulate_night`), get one explicit go-ahead, then loop target-by-target under hard
   guardrails (`check_night_guardrails`) and park at dawn or on any hard stop.
-- **`image-refinement`** — the post-session refinement run-book (on `seestar-refine`):
+- **`image-refinement`**: the post-session refinement run-book (on `seestar-refine`):
   stack the QA keep-list into a master + preview with DSS (default), or, for PixInsight
   owners, WBPP + a hand-off to the external `pixinsight-mcp` for a quality-gated finish.
 
@@ -394,7 +394,7 @@ ZWO; those names are used only to identify the hardware this software interopera
 
 **Firmware interoperability key.** Seestar firmware 7.18+ requires an RSA handshake. This
 project **ships no ZWO firmware, no ZWO application code, and no key**, and contains **no
-tool to extract or circumvent any key** — it drives the external `seestar_alp`, which owns
+tool to extract or circumvent any key**; it drives the external `seestar_alp`, which owns
 the handshake. To use real 7.18+ hardware you supply **your own** key file, extracted by you
 from **your own lawfully licensed** copy of the ZWO app for interoperability, as permitted
 under the reverse-engineering provision of **17 U.S.C. §1201(f)** (and analogous provisions
@@ -402,6 +402,6 @@ elsewhere). That key is a user secret: it lives only in the gitignored `secrets/
 `SEESTAR_SECRET_*` variable and is never committed. You are responsible for compliance with
 the laws of your own jurisdiction. See [`NOTICE`](NOTICE) for full third-party attribution.
 
-Licensed under the [MIT License](LICENSE). It drives — but never bundles or redistributes —
+Licensed under the [MIT License](LICENSE). It drives, but never bundles or redistributes,
 `seestar_alp` (GPL-3.0, separate process), the external `pixinsight-mcp` (MIT), DeepSkyStacker
 (freeware), and PixInsight (commercial); each remains under its own license.
