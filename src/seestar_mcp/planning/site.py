@@ -17,6 +17,8 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from ._store import write_json_atomic
+
 _DEFAULT_PATH = Path("data") / "site_profile.json"
 
 
@@ -49,13 +51,11 @@ def save_site(profile: SiteProfile, path: Path | None = None) -> Path:
     stored as JSON lists. Returns the path written.
     """
     path = Path(path) if path is not None else _DEFAULT_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = asdict(profile)
     # Normalise horizon-mask tuples to plain lists for JSON.
     data["horizon_mask"] = [list(arc) for arc in profile.horizon_mask]
-    with path.open("w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
-    return path
+    # Atomic: a crash mid-write must not lose the learned horizon mask.
+    return write_json_atomic(path, data)
 
 
 def load_site(path: Path | None = None) -> SiteProfile | None:
