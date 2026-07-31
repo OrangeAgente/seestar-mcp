@@ -20,6 +20,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from ._store import write_json_atomic
+
 _DEFAULT_PATH = Path("data") / "projects.json"
 # Open-ended goals (goal_minutes == 0) always need more data; sort them high by
 # treating their "remaining" as a very large number.
@@ -83,11 +85,9 @@ def save_projects(projects: dict[str, Project], path: Path | None = None) -> Pat
     Parent directories are created as needed. Returns the path written.
     """
     path = Path(path) if path is not None else _DEFAULT_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = {tid: asdict(proj) for tid, proj in projects.items()}
-    with path.open("w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
-    return path
+    # Atomic: a crash mid-write must not destroy months of accumulated history.
+    return write_json_atomic(path, data)
 
 
 def get_project(target_id: str, path: Path | None = None) -> Project | None:

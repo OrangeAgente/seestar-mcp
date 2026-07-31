@@ -34,6 +34,8 @@ import math
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from ._store import write_json_atomic
+
 _DEFAULT_PATH = Path("data") / "sky_failures.json"
 
 # Bin geometry: azimuth buckets AZ_BIN_DEG wide, altitude buckets ALT_BIN_DEG wide.
@@ -98,11 +100,9 @@ def save_sky_log(log: dict[str, SkyBin], path: Path | None = None) -> Path:
     Parent directories are created as needed. Returns the path written.
     """
     path = Path(path) if path is not None else _DEFAULT_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = {key: asdict(skybin) for key, skybin in log.items()}
-    with path.open("w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
-    return path
+    # Atomic: a crash mid-write must not lose cross-night obstruction evidence.
+    return write_json_atomic(path, data)
 
 
 def record_sky_result(
