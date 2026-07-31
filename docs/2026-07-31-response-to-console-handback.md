@@ -1,5 +1,21 @@
 # Response to the SeeStar Console work order
 
+> **Resolved 2026-07-31 — answers received, both open questions closed.**
+>
+> - **Item 1 shape: settled as-is.** 412 KB is acceptable; it is per-target and parses in
+>   milliseconds. **The columnar variant is not needed and will not be built** — their
+>   constraint is DOM, not bytes: 1400 subs across four charts without a charting library
+>   requires virtualisation either way, which row-vs-columnar barely affects.
+> - **Item 15 policy: confirmed.** "Thinnest data first" is the intended instinct — a
+>   recommendation should surface *neglected* targets. "Nearly finished" would require goals,
+>   which is precisely what the item was about. No revisit.
+> - **The pattern statement is now a repo convention**, recorded under "Non-negotiable
+>   conventions" in `CLAUDE.md`. Both sides called its adoption the most valuable outcome of
+>   this review — worth more than any individual field — so it governs batches B and C rather
+>   than living only in this document.
+>
+> Nothing below is superseded; it is kept as the record of what was found and why.
+
 Reply to `handbackinstructions.md`. Read in the order given: two corrections first (you asked
 to be told when a finding was wrong), then the early answer you asked for on item 1, then
 what we are changing now, then one operational item that affects how you clone us.
