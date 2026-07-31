@@ -27,6 +27,7 @@ signature; credentials live only in :mod:`seestar_mcp.secrets`.
 from __future__ import annotations
 
 import dataclasses
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1187,8 +1188,16 @@ class SeestarController:
         Appends a session, accumulates kept integration toward the goal, and
         auto-completes the project when the goal is met. Creates the project if
         it does not yet exist.
+
+        When ``median_fwhm`` is omitted it is backfilled from the newest QA report
+        for the target (see :func:`_latest_median_fwhm`), so a session logged at
+        wind-down carries its sharpness figure without the caller re-typing it. An
+        explicitly supplied value always wins; if no report exists the field stays
+        ``None``.
         """
         try:
+            if median_fwhm is None:
+                median_fwhm = _latest_median_fwhm(self.settings.data_dir, target)
             self.provenance.log_call(
                 tool="log_session_result",
                 args={
@@ -1266,6 +1275,32 @@ def _compact_metrics(metrics: Any) -> dict:
             continue  # already the sub's key
         out[key] = round(value, _METRIC_DP) if isinstance(value, float) else value
     return out
+
+
+def _latest_median_fwhm(data_dir: Path | str, target: str) -> float | None:
+    """Median FWHM from the newest QA report for ``target``; ``None`` if unknown.
+
+    ``log_session_result`` takes ``median_fwhm`` as an optional argument, so in
+    practice it was omitted every time and every session record stored ``None``:
+    the value only exists once subs have been downloaded and scored at wind-down,
+    and carrying it back by hand is exactly the step that gets skipped. Reports are
+    written as ``reports/qa_report_<slug>-<timestamp>.json``, whose names sort
+    chronologically, so the last match is the most recent session for that target.
+
+    Never raises — a missing directory, unreadable file, or malformed report all
+    degrade to ``None``, which is the same "unknown" the caller would have passed.
+    """
+    try:
+        reports = sorted(
+            (Path(data_dir) / "reports").glob(f"qa_report_{_slug(target)}-*.json")
+        )
+        if not reports:
+            return None
+        data = json.loads(reports[-1].read_text(encoding="utf-8"))
+        value = (data.get("medians") or {}).get("fwhm")
+        return float(value) if isinstance(value, (int, float)) else None
+    except Exception:  # noqa: BLE001 - best-effort backfill, never fatal
+        return None
 
 
 def _err(exc: AlpacaError) -> dict:

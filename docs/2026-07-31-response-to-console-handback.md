@@ -123,15 +123,26 @@ as separate summary fields, additive to the arrays, not instead of them.
 
 ---
 
-## What we are changing now
+## What is already done
 
-Starting immediately, in this order:
+These three are **implemented, tested and merged** — they are in the repository now, not
+planned:
 
-1. **Item 1** — per-sub metric arrays, as specified above. Unblocks your Review & QA screen.
-2. **Item 7** — `median_fwhm` populated at log time rather than depending on a caller.
-3. **Item 15** — `recommend_projects` ranked meaningfully when goals are unset, instead of a
-   sort that is a no-op. Confirmed on our side too: on a 13-project store its output was
-   byte-identical in ordering to `list_projects`, exactly as you measured.
+1. **Item 1 — per-sub metrics.** `qa_tier2` and `qa_session_report` now return
+   `subs[].metrics` in the shape above. Your Review & QA screen is unblocked.
+2. **Item 7 — `median_fwhm`.** When the argument is omitted, it is backfilled from the newest
+   QA report for that target (reports are named `qa_report_<slug>-<timestamp>.json`, which
+   sort chronologically). An explicitly supplied value still wins; with no report the field
+   stays `null`. The backfill happens *before* the provenance write, so the audit record
+   shows the value actually stored rather than the caller's omission.
+3. **Item 15 — `recommend_projects`.** Now a total order: remaining minutes descending
+   (unchanged, and open-ended still outranks goal-bounded), then **least-collected first**,
+   then **stalest first**, then target id for determinism. Your diagnosis was exactly right,
+   and we reproduced it independently: on our 13-project store the output ordering was
+   identical to `list_projects`. The new tie-breaks are a policy choice — if "thinnest data
+   first" is the wrong instinct for the dashboard's use, say so and we will revisit it.
+
+Regression suite is green (331 passing) and the strict-JSON invariant is pinned by test.
 
 Next, as one batch: the provenance work (items 10, plus `response_code` and elapsed) and the
 "return what you already compute" set (items 3, 5/13/14, 16, 17/19, 18, 20).

@@ -79,6 +79,45 @@ def test_goal_then_log_then_get(tmp_path):
     assert len(got["project"]["sessions"]) == 1
 
 
+def test_log_session_result_backfills_median_fwhm(tmp_path):
+    """median_fwhm must not stay null just because the caller omitted it.
+
+    It is an optional argument, so in practice every record was written with
+    None: the value only exists once subs are downloaded and scored at wind-down,
+    and the operator rarely carries it back by hand. Source it from the newest QA
+    report for the target instead.
+    """
+    import json as _json
+
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    # Two reports for the same target; the NEWEST must win (name sorts by time).
+    (reports / "qa_report_m27-20260724T010000Z.json").write_text(
+        _json.dumps({"target": "M27", "medians": {"fwhm": 9.9}}), encoding="utf-8"
+    )
+    (reports / "qa_report_m27-20260724T053152Z.json").write_text(
+        _json.dumps({"target": "M27", "medians": {"fwhm": 4.31}}), encoding="utf-8"
+    )
+    # A different target's report must not be picked up.
+    (reports / "qa_report_m2-20260724T060000Z.json").write_text(
+        _json.dumps({"target": "M2", "medians": {"fwhm": 1.11}}), encoding="utf-8"
+    )
+
+    c = _controller(tmp_path)
+    r = asyncio.run(c.log_session_result("M27", 35.2, 211, 211))
+    assert r["ok"] is True
+    assert r["project"]["sessions"][0]["median_fwhm"] == 4.31
+
+    # An explicitly supplied value still wins over the backfill.
+    r2 = asyncio.run(c.log_session_result("M27", 10.0, 60, 60, median_fwhm=3.0))
+    assert r2["project"]["sessions"][-1]["median_fwhm"] == 3.0
+
+    # No report for the target → stays None, no raise.
+    r3 = asyncio.run(c.log_session_result("M99", 5.0, 30, 30))
+    assert r3["ok"] is True
+    assert r3["project"]["sessions"][0]["median_fwhm"] is None
+
+
 def test_get_project_unknown(tmp_path):
     c = _controller(tmp_path)
     r = asyncio.run(c.get_project("M999"))

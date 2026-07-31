@@ -196,14 +196,37 @@ def _remaining(proj: Project) -> float:
     return proj.goal_minutes - proj.collected_minutes
 
 
+def _need_rank(proj: Project) -> tuple[float, float, str, str]:
+    """Sort key for "most in need of data first" — total order, no ties.
+
+    ``_remaining`` alone is not a ranking in practice: every project starts
+    open-ended (``goal_minutes == 0``) and so receives the same sentinel, leaving
+    the sort a no-op that returns store order while looking ranked. The extra
+    terms break that tie on something meaningful:
+
+    1. **remaining** (descending) — goal-bounded need, unchanged, and open-ended
+       work still sorts above it via the sentinel.
+    2. **collected minutes** (ascending) — among equally "unbounded" projects the
+       thinnest one needs depth most.
+    3. **last updated** (ascending) — older first, so a stale project resurfaces
+       ahead of one shot last night.
+    4. **target id** — deterministic final tie-break, so the order is stable
+       across runs for identical inputs.
+    """
+    return (-_remaining(proj), proj.collected_minutes, proj.updated_utc, proj.target_id)
+
+
 def recommend_projects(
     path: Path | None = None, *, limit: int | None = None
 ) -> list[Project]:
     """Active projects still needing data, most-needed first.
 
     Includes active projects with ``goal_minutes == 0`` (open-ended) or
-    ``collected_minutes < goal_minutes``, sorted by remaining minutes descending
-    (open-ended treated as a large remaining, so they sort high). ``limit`` caps
+    ``collected_minutes < goal_minutes``. Ranked by :func:`_need_rank`: remaining
+    minutes descending (open-ended treated as a large remaining, so they sort
+    high), then least-collected first, then stalest first, then target id. The
+    extra terms matter because a store where every project is open-ended would
+    otherwise tie on the sentinel and come back in insertion order. ``limit`` caps
     the count when given.
     """
     projects = load_projects(path)
@@ -213,7 +236,7 @@ def recommend_projects(
         if proj.status == "active"
         and (proj.goal_minutes == 0 or proj.collected_minutes < proj.goal_minutes)
     ]
-    needing.sort(key=_remaining, reverse=True)
+    needing.sort(key=_need_rank)
     if limit is not None:
         needing = needing[:limit]
     return needing
