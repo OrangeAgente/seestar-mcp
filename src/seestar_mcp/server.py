@@ -472,7 +472,18 @@ class SeestarController:
 
     @staticmethod
     def _compact_report(report: Any) -> dict:
-        """Summarize a SessionReport without dumping every metric field."""
+        """Summarize a SessionReport: session aggregates + per-sub verdicts+metrics.
+
+        Per-sub metrics are included deliberately. Consumers chart the session's
+        *distribution* (FWHM / eccentricity / SNR / star count across subs), which
+        the ``medians`` aggregate cannot reconstruct, and the arrays are computed
+        for the verdicts anyway — dropping them here discarded the only copy.
+        ``name`` is the stable per-sub key (the on-device filename).
+
+        Every metric is nullable: a sub that could not be analyzed still appears,
+        with ``metrics.error`` set. Values are finite-or-None by construction
+        (``qa_tier2._finite`` guards them), so this stays strict-JSON safe.
+        """
         return {
             "target": report.target,
             "total": report.total,
@@ -481,7 +492,12 @@ class SeestarController:
             "medians": report.medians,
             "dominant_reject_cause": report.dominant_reject_cause,
             "subs": [
-                {"name": v.name, "verdict": v.verdict, "reasons": v.reasons}
+                {
+                    "name": v.name,
+                    "verdict": v.verdict,
+                    "reasons": v.reasons,
+                    "metrics": _compact_metrics(v.metrics),
+                }
                 for v in report.subs
             ],
         }
@@ -1228,6 +1244,28 @@ class SeestarController:
         close = getattr(self.data, "aclose", None)
         if close is not None:
             await self.data.aclose()
+
+
+#: Decimal places kept for reported per-sub metrics. These are measurements good
+#: to ~3 significant figures (FWHM/HFR in pixels, eccentricity 0..1, an SNR proxy);
+#: emitting full float repr implies precision that does not exist and inflates a
+#: 1400-sub payload by roughly a third for no information.
+_METRIC_DP = 4
+
+
+def _compact_metrics(metrics: Any) -> dict:
+    """Per-sub metrics for the wire: rounded, without the duplicated name.
+
+    ``SubMetrics.name`` repeats the sub key already carried one level up, so it is
+    dropped here. Floats are finite-or-None by construction (``qa_tier2._finite``),
+    so rounding cannot introduce a NaN/Infinity token — this stays strict-JSON safe.
+    """
+    out: dict[str, Any] = {}
+    for key, value in dataclasses.asdict(metrics).items():
+        if key == "name":
+            continue  # already the sub's key
+        out[key] = round(value, _METRIC_DP) if isinstance(value, float) else value
+    return out
 
 
 def _err(exc: AlpacaError) -> dict:

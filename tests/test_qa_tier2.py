@@ -401,6 +401,45 @@ def _sample_report() -> SessionReport:
     )
 
 
+def test_compact_report_returns_per_sub_metrics():
+    """The compact payload MUST carry per-sub metrics, not just verdicts.
+
+    Consumers chart the distribution (FWHM / eccentricity / SNR / star count)
+    across a session's subs; pre-aggregated medians cannot reconstruct it. The
+    per-sub arrays are computed either way, so dropping them at the boundary
+    discarded the only copy. ``name`` is the stable key consumers join on.
+    """
+    from seestar_mcp.server import SeestarController
+
+    compact = SeestarController._compact_report(_sample_report())
+
+    # Existing shape is preserved (additive change).
+    assert compact["target"] == "M42"
+    assert compact["kept"] == 1
+    assert [s["verdict"] for s in compact["subs"]] == ["PASS", "REJECT"]
+
+    # Every sub carries its metrics, keyed by the stable sub name.
+    by_name = {s["name"]: s for s in compact["subs"]}
+    assert set(by_name) == {"good", "bad"}
+    for sub in compact["subs"]:
+        m = sub["metrics"]
+        assert set(m) >= {
+            "star_count", "fwhm", "hfr", "eccentricity",
+            "snr", "background", "scattered_light",
+        }
+        # The sub key is not repeated inside its own metrics (wire-size).
+        assert "name" not in m
+        # Metrics are rounded — full float repr implies precision we don't have.
+        for value in m.values():
+            if isinstance(value, float):
+                assert value == round(value, 4)
+    # The rejected sub's driving metric is visible, not just narrated in reasons.
+    assert by_name["bad"]["metrics"]["eccentricity"] == 0.61
+
+    # Strict-JSON boundary: no NaN/Infinity tokens may reach a consumer.
+    _strict_loads(json.dumps(compact, allow_nan=False))
+
+
 def test_render_markdown_has_headline_and_table():
     md = render_markdown(_sample_report())
     assert "Kept 1 of 2" in md
