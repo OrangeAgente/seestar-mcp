@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     # --- Filesystem layout ---
     data_dir: Path = Path("./data")
     provenance_log: Path = Path("./data/provenance.jsonl")  # append-only audit log
+    # Identifies THIS process in the provenance log. Several clients can append to
+    # one log (the agent's server, a dashboard running its own), and without an id
+    # their traffic is indistinguishable. Empty = a generated per-process id; set
+    # SEESTAR_CLIENT_ID to something recognisable (e.g. "console", "agent").
+    client_id: str = ""
     manifest_dir: Path = Path("./data/manifests")  # per-session manifests
 
     # --- HTTP ---

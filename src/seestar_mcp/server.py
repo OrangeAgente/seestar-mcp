@@ -105,7 +105,9 @@ class SeestarController:
             from .config import get_settings
 
             settings = get_settings()
-        provenance = ProvenanceLog(settings.provenance_log)
+        provenance = ProvenanceLog(
+            settings.provenance_log, client_id=settings.client_id or None
+        )
         alpaca = AlpacaClient.from_settings(settings, provenance)
         data = DataClient.from_settings(settings, alpaca, provenance)
         tier1 = Tier1Monitor(alpaca, provenance=provenance)
@@ -168,6 +170,7 @@ class SeestarController:
         a few standard ASCOM properties the Seestar lacks) resolves to ``None``.
         """
         try:
+            self.provenance.log_call(tool="get_status", args={})
             status = {
                 "connected": await self._maybe(self.alpaca.get_connected()),
                 "rightascension": await self._maybe(self.alpaca.get_ra()),
@@ -182,6 +185,7 @@ class SeestarController:
     async def get_view_state(self) -> dict:
         """Read the device's live ``get_view_state`` telemetry (native method)."""
         try:
+            self.provenance.log_call(tool="get_view_state", args={})
             state = await self.alpaca.method_sync("get_view_state")
             if (bad := _native_fail(state)) is not None:
                 return bad
@@ -303,6 +307,7 @@ class SeestarController:
     async def get_focuser_position(self) -> dict:
         """Read the current focuser position (native ``get_focuser_position``)."""
         try:
+            self.provenance.log_call(tool="get_focuser_position", args={})
             focus = await self.alpaca.method_sync(
                 "get_focuser_position", {"ret_obj": True}
             )

@@ -36,6 +36,7 @@ bodies are safe to pass to it verbatim. This module holds no secrets.
 from __future__ import annotations
 
 import json
+import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -316,37 +317,50 @@ class AlpacaClient:
         else:
             parameters_str = json.dumps(parameters)
 
+        # Every native call tunnels through this one endpoint, so logging it under
+        # a fixed name makes the audit log unable to answer "what happened" — the
+        # method that actually ran is in the parameters payload. Name the record
+        # after it, and carry it structured in args rather than only in prose.
+        method = parameters.get("method") if isinstance(parameters, dict) else None
+        tool_name = f"seestar.{method}" if method else f"alpaca.action.{action}"
+        log_args = {"action": action, "is_async": is_async}
+        if method:
+            log_args["method"] = method
+
         fields = {"Action": action, "Parameters": parameters_str}
         body = self._form_body(fields, client_txn_id)
+        started = time.perf_counter()
         try:
             response = await self._client.put(f"{self._base_path}/action", data=body)
         except httpx.RequestError as e:
             self._log(
-                tool="alpaca.put.action",
-                args={"action": action, "is_async": is_async},
+                tool=tool_name,
+                args=log_args,
                 request=_urlencode(body),
                 client_txn_id=client_txn_id,
                 response_code=None,
                 note=f"transport error: {type(e).__name__}",
+                elapsed_ms=_elapsed_ms(started),
             )
             raise AlpacaTransportError(-1, str(e), "action") from e
         if response.status_code >= 400:
             self._raise_for_http_status(
-                response, "action", tool="alpaca.put.action",
-                args={"action": action, "is_async": is_async},
+                response, "action", tool=tool_name,
+                args=log_args,
                 request=_urlencode(body), client_txn_id=client_txn_id,
             )
         data = response.json()
         server_txn_id = data.get("ServerTransactionID")
         error_number = int(data.get("ErrorNumber", 0))
         self._log(
-            tool="alpaca.put.action",
-            args={"action": action, "is_async": is_async},
+            tool=tool_name,
+            args=log_args,
             request=_urlencode(body),
             client_txn_id=client_txn_id,
             server_txn_id=server_txn_id,
             response_code=error_number,
             note=f"action={action}",
+            elapsed_ms=_elapsed_ms(started),
         )
         value, _, _ = self._parse_envelope(data, "action")
         return value
@@ -416,6 +430,15 @@ class AlpacaClient:
 
     async def abort_slew(self) -> Any:
         return await self.put_property("abortslew")
+
+
+def _elapsed_ms(started: float) -> float:
+    """Milliseconds since ``started`` (a :func:`time.perf_counter` reading).
+
+    Rounded to 3 dp: sub-microsecond resolution is noise for a network call, and
+    a full float repr would bloat every audit record for no information.
+    """
+    return round((time.perf_counter() - started) * 1000.0, 3)
 
 
 def _urlencode(body: dict[str, str]) -> str:
