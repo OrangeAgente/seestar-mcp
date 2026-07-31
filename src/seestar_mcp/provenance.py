@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -64,8 +65,17 @@ def hash_fits(path_or_bytes: str | Path | bytes) -> str:
 class ProvenanceLog:
     """Append-only JSONL audit log of MCP tool calls."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, client_id: str | None = None) -> None:
+        """``client_id`` names the process writing the records.
+
+        Several clients can append to one log — the agent's MCP server and, say,
+        a dashboard running its own instance — and without an identifier their
+        traffic is indistinguishable, so neither an audit nor a consumer can
+        attribute a call. Defaults to a short random per-process id; pass one
+        explicitly (or set ``SEESTAR_CLIENT_ID``) to make it recognisable.
+        """
         self.path = Path(path)
+        self.client_id = client_id or f"anon-{uuid.uuid4().hex[:8]}"
 
     def log_call(
         self,
@@ -78,18 +88,24 @@ class ProvenanceLog:
         response_code: int | None = None,
         fits_hash: str | None = None,
         note: str | None = None,
+        elapsed_ms: float | None = None,
     ) -> dict:
         """Append one redacted audit record and return it.
 
-        ``ts`` (UTC ISO 8601) and ``tool`` are always present. Other optional
-        fields are omitted when None. Secret-looking values in ``args`` (and in
-        ``request`` if it is a string) are redacted before writing.
+        ``ts`` (UTC ISO 8601), ``tool`` and ``client`` are always present. Other
+        optional fields are omitted when None. Secret-looking values in ``args``
+        (and in ``request`` if it is a string) are redacted before writing.
+
+        ``elapsed_ms`` is populated where the time is actually measured — the
+        transport layer — and left absent elsewhere rather than invented, since
+        most tool-layer records are written before the work runs.
         """
         redacted_args = redact(args)
         redacted_request = _redact_request(request)
 
         record: dict[str, Any] = {
             "ts": datetime.now(timezone.utc).isoformat(),
+            "client": self.client_id,
             "tool": tool,
             "args": redacted_args,
         }
@@ -101,6 +117,7 @@ class ProvenanceLog:
             "response_code": response_code,
             "fits_hash": fits_hash,
             "note": note,
+            "elapsed_ms": elapsed_ms,
         }
         for key, value in optional.items():
             if value is not None:

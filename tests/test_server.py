@@ -9,7 +9,7 @@ than raising.
 from __future__ import annotations
 
 import inspect
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import seestar_mcp.server as server_mod
 from seestar_mcp.alpaca_client import AlpacaError
@@ -107,7 +107,7 @@ def test_secretstore_not_in_any_tool_signature():
 def _controller_with_mock_alpaca(alpaca):
     return SeestarController(
         settings=_dummy_settings(),
-        provenance=AsyncMock(),
+        provenance=MagicMock(),  # ProvenanceLog is a SYNC api
         alpaca=alpaca,
         data=AsyncMock(),
         tier1=AsyncMock(),
@@ -137,7 +137,7 @@ async def test_goto_target_maps_alpaca_error_to_ok_false(tmp_path):
     alpaca.method_sync.side_effect = AlpacaError(1025, "ValueNotSet", "action")
     ctrl = SeestarController(
         settings=Settings(manifest_dir=tmp_path / "m"),
-        provenance=AsyncMock(),
+        provenance=MagicMock(),  # ProvenanceLog is a SYNC api
         alpaca=alpaca,
         data=AsyncMock(),
         tier1=AsyncMock(),
@@ -161,7 +161,7 @@ async def test_goto_target_native_error_maps_to_ok_false(tmp_path):
     }
     ctrl = SeestarController(
         settings=Settings(manifest_dir=tmp_path / "m"),
-        provenance=AsyncMock(),
+        provenance=MagicMock(),  # ProvenanceLog is a SYNC api
         alpaca=alpaca,
         data=AsyncMock(),
         tier1=AsyncMock(),
@@ -182,7 +182,7 @@ async def test_goto_target_native_success_stays_ok_true(tmp_path):
     alpaca.method_sync.return_value = {"status": "ok", "method": "iscope_start_view"}
     ctrl = SeestarController(
         settings=Settings(manifest_dir=tmp_path / "m"),
-        provenance=AsyncMock(),
+        provenance=MagicMock(),  # ProvenanceLog is a SYNC api
         alpaca=alpaca,
         data=AsyncMock(),
         tier1=AsyncMock(),
@@ -378,3 +378,36 @@ def test_parse_battery_reads_pi_get_info():
     assert _parse_battery(None) is None
     assert _parse_battery({"battery_capacity": 55}) == 55.0  # flat fallback
     assert _parse_battery({"result": {"battery_capacity": True}}) is None  # bool != pct
+
+
+def test_readonly_tools_log_under_their_own_names(tmp_path):
+    """get_status / get_view_state / get_focuser_position must appear in the log.
+
+    They previously produced only transport-level records, so a consumer reading
+    the log saw calls it could not attribute to any tool it had invoked — its own
+    traffic fanned out under names outside its allowlist.
+    """
+    import asyncio
+    import json as _json
+    from unittest.mock import AsyncMock, MagicMock
+
+    from seestar_mcp.config import Settings
+    from seestar_mcp.provenance import ProvenanceLog
+    from seestar_mcp.server import SeestarController
+
+    p = tmp_path / "prov.jsonl"
+    alpaca = AsyncMock()
+    alpaca.method_sync.return_value = {"result": {}}
+    c = SeestarController(
+        settings=Settings(_env_file=None, data_dir=tmp_path),
+        provenance=ProvenanceLog(p, client_id="agent"),
+        alpaca=alpaca,
+        data=MagicMock(),
+        tier1=MagicMock(),
+    )
+    asyncio.run(c.get_status())
+    asyncio.run(c.get_view_state())
+    asyncio.run(c.get_focuser_position())
+
+    tools = [_json.loads(line)["tool"] for line in p.read_text().splitlines()]
+    assert {"get_status", "get_view_state", "get_focuser_position"} <= set(tools)

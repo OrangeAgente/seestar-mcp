@@ -126,3 +126,50 @@ def test_session_manifest_write(tmp_path):
     assert data["meta"]["mount_mode"] == "alt-az"
     assert data["verdicts"]["sub1.fit"]["verdict"] == "PASS"
     assert data["keep_list"] == ["sub1.fit"]
+
+
+# --- client identity + timing (console batch B) -----------------------------
+
+
+def test_log_call_stamps_a_client_identifier(tmp_path):
+    """Every record must name which client produced it.
+
+    Several processes append to one provenance log — the agent's MCP server and
+    any dashboard running its own. Without an identifier the traffic is
+    indistinguishable, and a consumer cannot tell its own calls from anyone
+    else's (nor can an audit attribute a motion command to a caller).
+    """
+    p = tmp_path / "prov.jsonl"
+    log = ProvenanceLog(p, client_id="dashboard-1")
+    log.log_call(tool="get_status", args={})
+    log.log_call(tool="get_view_state", args={})
+
+    records = [json.loads(line) for line in p.read_text().splitlines()]
+    assert [r["client"] for r in records] == ["dashboard-1", "dashboard-1"]
+
+
+def test_client_identifier_defaults_to_a_stable_per_process_id(tmp_path):
+    """Unset → a generated id, identical for every call from that instance."""
+    p = tmp_path / "prov.jsonl"
+    log = ProvenanceLog(p)
+    log.log_call(tool="a", args={})
+    log.log_call(tool="b", args={})
+
+    records = [json.loads(line) for line in p.read_text().splitlines()]
+    ids = {r["client"] for r in records}
+    assert len(ids) == 1  # stable within the process
+    assert ids != {""} and next(iter(ids))  # and non-empty
+
+    # A separate instance is distinguishable from the first.
+    other = ProvenanceLog(tmp_path / "other.jsonl")
+    assert other.client_id != log.client_id
+
+
+def test_log_call_records_elapsed_and_response_code(tmp_path):
+    """A failed or slow call must be visible as such in the log."""
+    p = tmp_path / "prov.jsonl"
+    log = ProvenanceLog(p, client_id="x")
+    log.log_call(tool="t", args={}, response_code=1031, elapsed_ms=12.5)
+    rec = json.loads(p.read_text().splitlines()[0])
+    assert rec["response_code"] == 1031
+    assert rec["elapsed_ms"] == 12.5

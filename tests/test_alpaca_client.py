@@ -281,3 +281,52 @@ async def test_method_async_uses_async_action():
     params = json.loads(body["Parameters"][0])
     assert params == {"method": "iscope_start_stack", "params": {"restart": True}}
     await ac.aclose()
+
+
+@respx.mock
+async def test_native_method_is_logged_under_its_own_name(tmp_path):
+    """The provenance log must name the method that actually ran.
+
+    Every native call tunnels through PUT /action, and the record used the
+    literal tool name "alpaca.put.action" regardless of what was invoked — so a
+    log could not answer "what happened": on one real 691-record log, 278 records
+    collapsed into that single string. The native method is right there in the
+    Parameters payload; carry it.
+    """
+    from seestar_mcp.provenance import ProvenanceLog
+
+    respx.put(f"{BASE_URL}{API}/action").mock(
+        return_value=httpx.Response(200, json=_envelope({"state": "idle"}))
+    )
+    p = tmp_path / "prov.jsonl"
+    prov = ProvenanceLog(p, client_id="test-client")
+    ac, _ = _make_client(provenance=prov)
+    await ac.method_sync("get_device_state")
+    await ac.aclose()
+
+    records = [json.loads(line) for line in p.read_text().splitlines()]
+    rec = records[-1]
+    assert rec["tool"] == "seestar.get_device_state"      # not alpaca.put.action
+    assert rec["args"]["method"] == "get_device_state"    # structured, not prose
+    assert rec["args"]["action"] == "method_sync"         # the tunnel is still visible
+    assert rec["client"] == "test-client"
+    assert rec["response_code"] == 0
+    assert isinstance(rec["elapsed_ms"], float)           # a slow call is visible
+
+
+@respx.mock
+async def test_non_method_action_keeps_an_action_scoped_name(tmp_path):
+    """An action that is not a method tunnel still logs distinguishably."""
+    from seestar_mcp.provenance import ProvenanceLog
+
+    respx.put(f"{BASE_URL}{API}/action").mock(
+        return_value=httpx.Response(200, json=_envelope("ok"))
+    )
+    p = tmp_path / "prov.jsonl"
+    prov = ProvenanceLog(p, client_id="c")
+    ac, _ = _make_client(provenance=prov)
+    await ac.invoke_action("some_action")
+    await ac.aclose()
+
+    rec = json.loads(p.read_text().splitlines()[-1])
+    assert rec["tool"] == "alpaca.action.some_action"
