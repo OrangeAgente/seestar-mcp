@@ -55,6 +55,13 @@ hash-locked in `uv.lock`; re-run `uv lock` if you touch `pyproject.toml`.
 - **No secrets in config/source/logs.** `provenance.py` redacts; `secrets.py` loads on demand.
 - **Reason-tagged verdicts.** Every QA verdict, conditions call, target score, guardrail stop,
   and obstruction suggestion carries human-readable `reasons` — "no unexplained rejects."
+- **If a tool names a quantity in prose, return it as a field too.** `reasons[]` *explains* a
+  value; it is not a substitute for carrying it. A number that was computed, scored on, or used
+  to gate a decision must reach the caller as structured data — otherwise consumers parse
+  English or re-derive it, and re-derivation silently drifts from the model. (Adopted 2026-07-31
+  after the SeeStar Console review found ten instances: precipitation gated `go` but only
+  appeared inside a sentence; the LP classification set 20% of a target's rank and was
+  discarded; per-sub QA metrics were computed and dropped at the boundary.)
 - **Backward compatibility:** additive optional params (e.g. `rank_targets(projects=None)`,
   `SubMetrics.scattered_light=None`) must reproduce prior behavior exactly — keep the regression
   tests that pin this.
