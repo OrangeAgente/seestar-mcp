@@ -299,9 +299,16 @@ def test_observability_minutes_are_invariant_not_merely_present():
     from seestar_mcp.planning.catalog import find_target
     from seestar_mcp.planning.site import SiteProfile
 
+    # M82, not M31. At lat 45 its declination (+69.7) puts its MINIMUM altitude at
+    # ~24.7 deg — above the 20-deg floor — so it is circumpolar-above-floor and
+    # `above_floor` saturates the whole dark window at every season. That lets the
+    # bound be a two-sided EQUALITY, which also catches a minutes-to-hours
+    # deflation that a one-sided `<=` would pass. M31 (dec +41.3, min alt -3.7)
+    # saturates only seasonally — 0 minutes in April, 332 in January — so it is a
+    # fragile fixture for this assertion.
     site = SiteProfile(name="x", lat_deg=45.0, lon_deg=-75.0)
     when = "2026-08-01T04:00:00Z"
-    obs = observability(site, find_target("M31"), when)
+    obs = observability(site, find_target("M82"), when)
 
     # 1. Minutes, non-negative.
     assert obs.dark_minutes_above_floor >= 0
@@ -313,8 +320,21 @@ def test_observability_minutes_are_invariant_not_merely_present():
     window_min = (
         datetime.fromisoformat(end) - datetime.fromisoformat(start)
     ).total_seconds() / 60.0
-    assert obs.dark_minutes_above_floor <= window_min + 2.0, (  # +1 sample of slack
+
+    # Slack is one 2-min grid step PLUS an epsilon. A bare `+ 2.0` has zero margin
+    # and does fire on legitimate values: measured excesses of +2.0069 (M31,
+    # 2026-10-15) and +2.0098 (M82, 2026-04-15) come from counting inclusive grid
+    # samples against a non-multiple-of-step window, not from any error.
+    GRID_STEP_MIN = 2.0
+    EPS = 0.1
+    assert obs.dark_minutes_above_floor <= window_min + GRID_STEP_MIN + EPS, (
         "minutes above the floor cannot exceed the dark window"
+    )
+    # Two-sided: for a circumpolar-above-floor target this must SATURATE the
+    # window. A one-sided bound would pass a minutes->hours deflation silently.
+    assert abs(obs.dark_minutes_above_floor - window_min) <= GRID_STEP_MIN + EPS, (
+        "M82 is above the floor all night at this latitude; above_floor must equal "
+        "the dark window. A units deflation would show here and nowhere else."
     )
 
     # 3. The sweet band is a SUBSET of above-floor, so it can never exceed it.
@@ -346,3 +366,47 @@ def test_summary_omits_sessions_rather_than_emptying_it(tmp_path):
     full = asyncio.run(c.list_projects(detail="full"))["projects"][0]
     _require(full, ["sessions"], "list_projects(detail=full)")
     assert len(full["sessions"]) == 1
+
+
+def test_last_session_utc_is_the_latest_date_not_the_last_element(tmp_path):
+    """A backfilled session must not report an older date as "last".
+
+    ``now_utc`` is caller-supplied (the determinism rule) and nothing sorts the
+    list on load, so appending a session for an earlier night puts an older date
+    in the final slot. ``sessions[-1]`` would report it as the most recent.
+    """
+    from seestar_mcp.planning.projects import log_session_result as _log
+
+    p = tmp_path / "projects.json"
+    _log("M76", "M76", integration_minutes=10, subs_total=1, subs_kept=1,
+         now_utc="2026-08-01T04:00:00Z", path=p)
+    # A session backfilled for an EARLIER night, appended afterwards.
+    _log("M76", "M76", integration_minutes=10, subs_total=1, subs_kept=1,
+         now_utc="2026-07-05T04:00:00Z", path=p)
+
+    from seestar_mcp.planning.projects import load_projects
+    from seestar_mcp.server import _project_payload
+
+    project = load_projects(p)["M76"]
+    summary = _project_payload(project, "summary")
+    assert summary["sessions_count"] == 2
+    assert summary["last_session_utc"] == "2026-08-01T04:00:00Z", (
+        "last_session_utc must be the latest date, not the last list element"
+    )
+
+
+def test_recommend_projects_has_the_same_detail_escape_hatch(tmp_path):
+    """Both project tools take ``detail`` — one escape hatch is not enough.
+
+    If only ``list_projects`` gained the parameter, a consumer hitting the new
+    summary default on ``recommend_projects`` would have no way to opt back out.
+    """
+    c = _controller(tmp_path)
+    asyncio.run(c.log_session_result("M76", 10.0, 60, 60))
+
+    summary = asyncio.run(c.recommend_projects())["projects"][0]
+    assert "sessions" not in summary
+    assert summary["sessions_count"] == 1
+
+    full = asyncio.run(c.recommend_projects(detail="full"))["projects"][0]
+    _require(full, ["sessions"], "recommend_projects(detail=full)")
