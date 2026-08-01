@@ -28,6 +28,9 @@ import re
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
+import respx
+
 from seestar_mcp.config import Settings
 from seestar_mcp.server import SeestarController
 
@@ -486,3 +489,178 @@ def test_report_ships_the_effective_thresholds_it_applied(tmp_path):
         if isinstance(value, float):
             assert value == round(value, 4), f"thresholds.{key} not rounded"
     json.loads(json.dumps(out, allow_nan=False))
+
+
+# --- assess_conditions: units, because a pct->fraction change is silent -----
+
+
+@respx.mock
+async def test_assess_conditions_contract_and_units(tmp_path):
+    """Keys, plus the UNIT invariants that presence checks cannot see.
+
+    Ranked second by the Console team on "how silently a change would break us":
+    ``cloud_cover_pct`` and ``wind_kph`` are rendered as numbers with units
+    attached, so a percent-to-fraction change turns 40% cloud into "0.4%" and
+    reads as a clear night. Nothing is absent, nothing fails to parse, and the
+    verdict on screen is the opposite of the truth.
+    """
+    respx.get(url__startswith="https://api.open-meteo.com/v1/forecast").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "hourly": {
+                    "time": ["2026-08-02T02:00", "2026-08-02T03:00"],
+                    "cloudcover_low": [10, 40],
+                    "cloudcover_mid": [0, 5],
+                    "cloudcover_high": [10, 10],
+                    "relativehumidity_2m": [60, 62],
+                    "dewpoint_2m": [8, 8],
+                    "temperature_2m": [18, 17],
+                    "windspeed_10m": [5, 6],
+                    "precipitation_probability": [0, 10],
+                }
+            },
+        )
+    )
+    c = _controller(tmp_path)
+    await c.set_site_profile(name="Yard", lat=45.0, lon=-75.0, bortle=6)
+    out = await c.assess_conditions()
+
+    _require(
+        out,
+        ["ok", "location", "suitability", "dew_risk", "moon_illum_frac",
+         "dark_window_utc", "source", "reasons", "go", "cloud_cover_pct",
+         "wind_kph", "transparency", "seeing"],
+        "assess_conditions",
+    )
+    _require(out["location"], ["site_name", "mask_applied"], "location")
+
+    # UNITS — the invariants that catch what presence cannot.
+    assert 0.0 <= out["cloud_cover_pct"] <= 100.0, "cloud cover is a PERCENT (0-100)"
+    assert out["cloud_cover_pct"] > 1.0, (
+        "a fraction would land in 0..1 and read as a clear night"
+    )
+    assert out["wind_kph"] >= 0.0
+    assert 0.0 <= out["moon_illum_frac"] <= 1.0, "moon illumination is a FRACTION (0-1)"
+    assert 0 <= out["suitability"] <= 100
+    assert len(out["dark_window_utc"]) == 2, "consumed as a two-element tuple"
+    # go is tri-state on their side: True / False / None all render distinctly.
+    assert out["go"] in (True, False, None)
+
+
+# --- qa_tier1 ---------------------------------------------------------------
+
+
+def test_qa_tier1_contract(tmp_path):
+    """``trends`` is their only optional here; everything else is required.
+
+    Ranked third: drift is loud because a missing required field fails their
+    parse immediately. Pinned so the loudness is guaranteed rather than assumed.
+    """
+    from seestar_mcp.qa_tier1 import Tier1Snapshot
+
+    c = _controller(tmp_path)
+    # poll() returns the dataclass; the controller asdict()s it and drops `raw`.
+    c.tier1.poll = AsyncMock(
+        return_value=Tier1Snapshot(
+            ts="2026-08-02T04:00:00+00:00",
+            stacked=42, rejected=1, solve_ok=True, solve_rms=None,
+            focus_pos=1567, hfd=2.2, tracking=True,
+            raw={"bulky": "kept in provenance, trimmed from the payload"},
+        )
+    )
+    # check/status_line/trends are SYNC on Tier1Monitor — an AsyncMock here would
+    # hand the payload three coroutines instead of values.
+    c.tier1.check = MagicMock(return_value=[])
+    c.tier1.status_line = MagicMock(
+        return_value="stacked 42 | rejected 1 | solve OK"
+    )
+    c.tier1.trends = MagicMock(
+        return_value={"stacked_delta": 5, "rejected_delta": 0,
+                      "focus_delta": 0, "hfd_delta": None}
+    )
+    out = asyncio.run(c.qa_tier1())
+
+    # `raw` is deliberately trimmed from the payload — they never see it.
+    assert "raw" not in out["snapshot"]
+
+    _require(out, ["ok", "snapshot", "flags", "status_line", "trends"], "qa_tier1")
+    _require(out["snapshot"], ["ts"], "qa_tier1.snapshot")
+    # They render status_line verbatim rather than composing one.
+    assert isinstance(out["status_line"], str) and out["status_line"]
+
+
+# --- plan_targets -----------------------------------------------------------
+
+
+TARGET_TYPES = {
+    "galaxy", "emission_nebula", "reflection_nebula", "planetary_nebula",
+    "globular_cluster", "open_cluster", "supernova_remnant", "dark_nebula",
+}
+
+
+def test_plan_targets_contract_and_target_type_vocabulary(tmp_path, monkeypatch):
+    """11 of 14 per-target fields are required; ``type`` drives display labels.
+
+    A ``type`` value outside the agreed vocabulary is not a parse failure — it is
+    a target that renders with no label, which is why the set is pinned here.
+    """
+    import seestar_mcp.server as server_mod
+
+    c = _controller(tmp_path)
+    asyncio.run(c.set_site_profile(name="Yard", lat=45.0, lon=-75.0, bortle=6))
+    monkeypatch.setattr(server_mod, "dark_window", lambda site, when: ("a", "b"))
+    monkeypatch.setattr(server_mod, "moon_illumination", lambda when: 0.1)
+    monkeypatch.setattr(server_mod, "load_catalog", lambda: [])
+
+    async def _fake_assess(site, window, illum, **kw):
+        from seestar_mcp.planning.weather import ConditionsAssessment
+        return ConditionsAssessment(
+            go=True, suitability=88, cloud_cover_pct=5.0, dew_risk="low",
+            wind_kph=6.0, transparency="good", seeing="good", moon_illum_frac=0.1,
+            dark_window_utc=("a", "b"), source="open-meteo", reasons=["clear"],
+        )
+
+    monkeypatch.setattr(server_mod, "assess_conditions_weather", _fake_assess)
+    out = asyncio.run(c.plan_targets())
+
+    _require(out, ["ok", "location", "conditions", "count", "targets"], "plan_targets")
+    for target in out["targets"]:
+        _require(
+            target,
+            ["id", "name", "type", "score", "reasons", "best_window_utc",
+             "recommended_subs", "recommended_exposure_s", "max_alt_deg",
+             "sweet_band_min", "moon_sep_deg"],
+            "plan_targets.targets[]",
+        )
+        assert target["type"] in TARGET_TYPES, (
+            f"unknown target type {target['type']!r} renders with no label"
+        )
+        assert len(target["best_window_utc"]) == 2
+
+
+# --- get_site_profile -------------------------------------------------------
+
+
+def test_get_site_profile_contract(tmp_path):
+    """Every field required — ranked LAST because a change fails their parse loudly.
+
+    Pinned anyway for the two that are geometry: ``min_altitude_deg`` and
+    ``field_rotation_ceiling_deg`` draw the sweet-band gauge's edges, so they must
+    survive even if the gauge's live marker never arrives.
+    """
+    c = _controller(tmp_path)
+    asyncio.run(c.set_site_profile(name="Yard", lat=45.0, lon=-75.0, bortle=6))
+    out = asyncio.run(c.get_site_profile())
+
+    _require(out, ["ok", "profile"], "get_site_profile")
+    _require(
+        out["profile"],
+        ["name", "lat_deg", "lon_deg", "bortle", "min_altitude_deg",
+         "field_rotation_ceiling_deg", "horizon_mask", "elevation_m"],
+        "get_site_profile.profile",
+    )
+    profile = out["profile"]
+    assert 0 < profile["min_altitude_deg"] < profile["field_rotation_ceiling_deg"] < 90, (
+        "the gauge's edges must stay ordered and on-sky"
+    )
