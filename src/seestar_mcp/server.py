@@ -640,6 +640,14 @@ class SeestarController:
         readable as a confident "yes". ``unknown`` means a run was written but
         its stamp is too old to vouch for (the writer probably died), which is
         different from ``idle`` and must not be collapsed into it.
+
+        **``run`` is NOT a liveness signal.** It carries the record in TWO states:
+        ``active``, and ``unknown`` when the stamp went stale — the stale record is
+        retained deliberately, because "here is what was running when we lost
+        track" is more useful than discarding it. It is ``None`` only for ``idle``
+        and for an unreadable file. So ``run is not None`` does **not** mean a
+        session is live; only ``state == "active"`` means that. Branch on
+        ``state``, never on the presence of ``run``.
         """
         try:
             self.provenance.log_call(tool="get_run_state", args={})
@@ -1657,6 +1665,12 @@ async def get_run_state() -> dict:
     or ``"unknown"`` (a run was recorded but its stamp is too old to trust — the
     writer probably died mid-run). ``unknown`` is deliberately distinct from
     ``idle`` and must not be read as "the scope is free".
+
+    ``run`` carries the record in BOTH ``active`` and stale-``unknown`` states (the
+    stale record is kept on purpose — what was running when we lost track is worth
+    knowing), and is ``None`` only for ``idle`` or an unreadable file. **Branch on
+    ``state``, not on whether ``run`` is present** — a non-null ``run`` is not
+    proof of a live session.
 
     Answers the question that is otherwise only inferable from a ``get_view_state``
     timeout, which produces a confident wrong answer in exactly the wrong
