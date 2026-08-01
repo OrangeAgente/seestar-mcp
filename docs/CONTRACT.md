@@ -11,10 +11,10 @@ it end to end.
 
 | | |
 |---|---|
-| **Version** | 1.0.0 |
-| **Covers** | 9 of 34 tools — the ones a consumer actually parses |
+| **Version** | 1.0.1 |
+| **Covers** | 10 of 34 tools — the ones a consumer actually parses |
 | **Validated against a real consumer** | yes — the SeeStar Console parsed a real 25-sub `qa_tier2` payload with an independently written schema, first try, no changes |
-| **Enforced by** | `tests/test_console_contract.py` (16 tests) |
+| **Enforced by** | `tests/test_console_contract.py` (19 tests, all 10 pinned at the tool boundary) |
 
 ## The rules
 
@@ -72,6 +72,12 @@ it end to end.
   the previous announcement said "`run: null` when idle", which is true of `idle`
   and of an unreadable file but wrong for stale-`unknown`, the one case where the
   record is retained *and* untrustworthy).
+  *Document corrections after publication, no shape change:* the Status table
+  still read `1.0.0` while the title read `1.0.1` — the version row is the field a
+  consumer pins against, and a test now asserts the two agree. The coverage count
+  said 9 while the list named 10; the list was ahead of the tests, so
+  `get_run_state` and `get_target_observability` gained tool-boundary pins rather
+  than the claim being softened.
 - **v1.0.0** — initial contract, 9 tools.
 
 ## Timestamps — two shapes, both deliberate
