@@ -1,7 +1,9 @@
 # The MARGINAL tier is saturated by a fixed eccentricity threshold
 
-**Status:** measured, not fixed. The change below needs a decision — it alters QA
-verdicts for every user, and nothing is operationally broken today.
+**Status:** FIXED 2026-08-01, contract v1.1.0. Option 1 below was chosen, with the
+0.42 constant retained as a floor rather than deleted. Re-scoring the same 970
+subs: PASS 25→710, MARGINAL 831→146, **REJECT 114→114, all three keep-lists
+byte-identical**. The measurement that motivated it is kept below as written.
 
 ## What was measured
 
@@ -94,6 +96,27 @@ Recommendation: **1**, with 2 as the immediate mitigation. Option 1 is what the
 codebase already does everywhere else, and this repo is now public — shipping a
 default that grades 86% of a good night as MARGINAL is a bad first impression for
 every Seestar user who installs it.
+
+## What shipped
+
+`max(median + 1.0σ, 0.42)`, in `qa_tier2._ecc_marginal_threshold`. Option 1, but
+keeping 0.42 as a **floor** rather than deleting it — the perceptibility argument
+was always sound, it just needed to stop being the whole rule.
+
+Because the floor only ever raises the line, this is a no-op for any rig sitting
+below it. Sessions on a well-performing scope score exactly as before, single-sub
+sessions included (σ is 0 there, so it collapses to `max(median, 0.42)`, which is
+the old comparison). The only sessions whose verdicts move are the saturated ones
+— which is the entire bug. Three pre-existing eccentricity tests passed unchanged
+against the new code, which is the evidence for that claim, plus three new
+regression pins.
+
+`k = 1.0` matches `qa_fwhm_marginal_sigma`; no new tuning philosophy. It produced
+12–15% marginal-on-eccentricity per target, stable across all three.
+
+The reject line was left alone. At 0.575 it sits above p99 and fires on 4.4% —
+measured as correct, and moving it risks emptying a keep-list on a genuinely poor
+rig.
 
 ## Also measured: the real Console payload
 

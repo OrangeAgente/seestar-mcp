@@ -471,9 +471,16 @@ def test_report_ships_the_effective_thresholds_it_applied(tmp_path):
     )
     thresholds = out["summary"]["thresholds"]
 
-    # The two lines the eccentricity chart asked for.
+    # The two lines the eccentricity chart asked for. The reject line is absolute
+    # (0.575, the canonical PixInsight cutoff) and pinned as such. The marginal
+    # line became session-derived on 2026-08-01 -- it is max(median + 1sigma,
+    # 0.42) -- so pinning it to the config constant would contradict this test's
+    # own rule above. Pin the invariants instead: present, a fraction, and never
+    # below the perceptibility floor, which is what a chart actually relies on.
     assert thresholds["eccentricity_reject"] == 0.575
-    assert thresholds["eccentricity_marginal"] == 0.42
+    ecc_marginal = thresholds["eccentricity_marginal"]
+    assert isinstance(ecc_marginal, float)
+    assert 0.42 <= ecc_marginal <= 1.0
 
     # Session-derived floors are present and are NOT the raw config factors.
     for key in ("snr_floor", "star_count_floor"):
@@ -679,7 +686,7 @@ def test_contract_version_is_declared_and_matches_this_suite():
     title = re.search(r"^# seestar-mcp consumer contract — v(\S+)", contract, re.M)
     assert title, "contract has no versioned title"
     version = title.group(1)
-    assert version == "1.0.1"
+    assert version == "1.1.0"
 
     # The Status table is the field a consumer actually pins against, so it must
     # agree with the title. They drifted apart once (title said 1.0.1, the table
