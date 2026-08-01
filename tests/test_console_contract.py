@@ -172,6 +172,13 @@ def test_qa_tier2_subs_carry_metrics_and_keep_unanalysable_rows(tmp_path):
 
     They render those as "unanalysed" rows and join on ``name``, so filtering
     them out silently shortens a chart rather than reporting a gap.
+
+    VALIDATED 2026-08-02: these pins were written against the work order's prose
+    before a consumer existed. The Console team has since written Tier2Schema and
+    parsed a real 25-sub payload with it — first try, no schema changes — and ran
+    these same assertions against the tool's own output: all keys present, 25/25
+    sub names unique, kept == len(keep_list) == non-REJECT == 19. The loop is
+    closed; these are no longer intent.
     """
     c = _controller(tmp_path)
     paths = [
@@ -410,3 +417,27 @@ def test_recommend_projects_has_the_same_detail_escape_hatch(tmp_path):
 
     full = asyncio.run(c.recommend_projects(detail="full"))["projects"][0]
     _require(full, ["sessions"], "recommend_projects(detail=full)")
+
+
+def test_aggregates_are_rounded_like_the_per_sub_metrics(tmp_path):
+    """medians and wfwhm round to the same precision as subs[].metrics.
+
+    They are derived from the same measurements, so emitting 16 significant
+    digits for the aggregate while rounding the values it summarises implied a
+    precision difference that does not exist. Reported by the Console team, who
+    were formatting them client-side rather than trusting the payload.
+    """
+    c = _controller(tmp_path)
+    out = asyncio.run(
+        c.qa_tier2(paths=[
+            str(FIXTURE_DIR / "good.fits"),
+            str(FIXTURE_DIR / "bad_ecc.fits"),
+            str(FIXTURE_DIR / "hazy.fits"),
+        ])
+    )
+    summary = out["summary"]
+
+    assert summary["wfwhm"] == round(summary["wfwhm"], 4)
+    for key, value in summary["medians"].items():
+        if isinstance(value, float):
+            assert value == round(value, 4), f"medians.{key} not rounded"
