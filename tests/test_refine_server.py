@@ -14,8 +14,18 @@ def test_check_backends_tool_registered():
 
 
 def test_check_backends_controller(tmp_path):
+    """All three backends absent → all three report False.
+
+    ``pixinsight_mcp_bridge`` is pointed at a non-existent path deliberately: the
+    default is ``~/.pixinsight-mcp/bridge``, so without it this asserted a fact
+    about the developer's home directory and failed permanently on any machine
+    with pixinsight-mcp installed.
+    """
     settings = RefineSettings(
-        _env_file=None, data_dir=tmp_path, output_dir=tmp_path
+        _env_file=None,
+        data_dir=tmp_path,
+        output_dir=tmp_path,
+        pixinsight_mcp_bridge=str(tmp_path / "no-bridge-here"),
     )
     controller = RefineController.from_settings(settings)
     result = asyncio.run(controller.check_backends())
@@ -301,3 +311,28 @@ def test_list_masters_returns_files(tmp_path):
     assert "notes.txt" not in names
     for m in result["masters"]:
         assert "size" in m and "mtime" in m
+
+
+def test_check_backends_is_independent_of_the_developer_home_dir(tmp_path):
+    """The pixinsight-mcp bridge path must be configurable, like the other two.
+
+    ``dss_cli`` and ``pixinsight_exe`` are settings; the bridge path was hardcoded
+    to ``~/.pixinsight-mcp/bridge``. That made ``check_backends`` report whatever
+    happened to be in the developer's home directory, so this suite failed
+    permanently on any machine with pixinsight-mcp installed — and a permanently
+    red test trains everyone to read red as normal.
+    """
+    settings = RefineSettings(
+        _env_file=None,
+        data_dir=tmp_path,
+        output_dir=tmp_path,
+        pixinsight_mcp_bridge=str(tmp_path / "no-bridge-here"),
+    )
+    controller = RefineController.from_settings(settings)
+    result = asyncio.run(controller.check_backends())
+
+    assert result["ok"] is True
+    assert result["backends"]["pixinsight_mcp"] is False, (
+        "an explicitly configured, non-existent bridge path must report False "
+        "regardless of what exists under $HOME"
+    )
