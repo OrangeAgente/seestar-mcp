@@ -664,3 +664,23 @@ def test_get_site_profile_contract(tmp_path):
     assert 0 < profile["min_altitude_deg"] < profile["field_rotation_ceiling_deg"] < 90, (
         "the gauge's edges must stay ordered and on-sky"
     )
+
+
+def test_contract_version_is_declared_and_matches_this_suite():
+    """docs/CONTRACT.md is the versioned artifact consumers pin against.
+
+    It exists so the exchange of prose documents can stop: a consumer diffs a
+    file instead of reading a work order. Pinned here so the version cannot drift
+    out of the document silently, and so a reader of the tests can find it.
+    """
+    contract = (Path(__file__).parents[1] / "docs" / "CONTRACT.md").read_text(
+        encoding="utf-8"
+    )
+    assert "# seestar-mcp consumer contract — v1.0.0" in contract
+    # The rules a consumer relies on must actually be stated in it.
+    for rule in (
+        "Required means present, not truthy",
+        "Unknown ≠ empty",
+        "if a tool names a quantity in prose",
+    ):
+        assert rule.lower() in contract.lower(), f"contract is missing: {rule}"
