@@ -54,13 +54,13 @@ async def _tool_names() -> set[str]:
 def test_planning_tools_registered():
     names = asyncio.run(_tool_names())
     assert PLANNING_TOOLS <= names
-    assert len(asyncio.run(mcp.list_tools())) == 33
+    assert len(asyncio.run(mcp.list_tools())) == 34
 
 
 def test_project_tools_registered():
     names = asyncio.run(_tool_names())
     assert PROJECT_TOOLS <= names
-    assert len(asyncio.run(mcp.list_tools())) == 33
+    assert len(asyncio.run(mcp.list_tools())) == 34
 
 
 def test_goal_then_log_then_get(tmp_path):
@@ -317,7 +317,7 @@ DARK = ("2026-07-05T02:00:00Z", "2026-07-05T08:00:00Z")
 def test_autonomous_tools_registered():
     names = asyncio.run(_tool_names())
     assert AUTONOMOUS_TOOLS <= names
-    assert len(asyncio.run(mcp.list_tools())) == 33
+    assert len(asyncio.run(mcp.list_tools())) == 34
 
 
 def test_simulate_night_issues_no_motion(tmp_path, monkeypatch):
@@ -531,7 +531,7 @@ OBSTRUCTION_TOOLS = {"log_sky_result", "suggest_horizon_mask", "add_horizon_mask
 def test_obstruction_tools_registered():
     names = asyncio.run(_tool_names())
     assert OBSTRUCTION_TOOLS <= names
-    assert len(asyncio.run(mcp.list_tools())) == 33
+    assert len(asyncio.run(mcp.list_tools())) == 34
 
 
 def test_add_horizon_mask_appends(tmp_path):

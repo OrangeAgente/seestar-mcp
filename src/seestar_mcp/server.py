@@ -56,6 +56,7 @@ from .planning.ranker import rank_targets
 from .planning.site import SiteProfile, load_site, save_site
 from .planning.weather import assess_conditions as assess_conditions_weather
 from .provenance import ProvenanceLog, SessionManifest
+from .run_state import RunState, clear_run_state, read_run_state, write_run_state
 from .qa_tier1 import Tier1Monitor
 from .qa_tier2 import analyze_session, write_report
 
@@ -213,6 +214,25 @@ class SeestarController:
                 session_id = f"{_slug(name)}-{stamp}"
             self.session_id = session_id
             self.target = name
+            # Persist the run so a restarted server can answer "is a run in
+            # progress?" without inference. session_id alone was in-memory, so
+            # five server deaths in one night left no successor able to resume or
+            # wind down. Best-effort: a failure here must never block a goto.
+            try:
+                resolved = find_target(name)
+                self._run_start_utc = getattr(self, "_run_start_utc", None) or (
+                    datetime.now(timezone.utc).isoformat()
+                )
+                write_run_state(
+                    RunState(
+                        session_start_utc=self._run_start_utc,
+                        target=name,
+                        resolved_id=resolved.id if resolved is not None else None,
+                    ),
+                    self._run_state_path(),
+                )
+            except Exception:  # noqa: BLE001 - run state is advisory, never fatal
+                pass
             self.manifest = SessionManifest(
                 session_id,
                 self.settings.manifest_dir,
@@ -377,6 +397,10 @@ class SeestarController:
             result = await self.alpaca.method_sync("scope_park")
             if (bad := _native_fail(result)) is not None:
                 return bad
+            # Park IS wind-down: the run is over, so the state file goes. Leaving
+            # it would report a run in progress against a parked mount.
+            clear_run_state(self._run_state_path())
+            self._run_start_utc = None
             return {"ok": True, "result": result}
         except AlpacaError as exc:
             return _err(exc)
@@ -587,6 +611,25 @@ class SeestarController:
     def _projects_path(self) -> Path:
         """Path of the persisted projects/history store under the data dir."""
         return self.settings.data_dir / "projects.json"
+
+    def _run_state_path(self) -> Path:
+        """Path of the live-run state file under the data dir."""
+        return self.settings.data_dir / "run_state.json"
+
+    async def get_run_state(self) -> dict:
+        """Is a run in progress right now, and what is it doing?
+
+        Read-only. Returns ``state`` of ``"active"``, ``"idle"`` or ``"unknown"``
+        — tri-valued rather than a boolean, because a stale file must not be
+        readable as a confident "yes". ``unknown`` means a run was written but
+        its stamp is too old to vouch for (the writer probably died), which is
+        different from ``idle`` and must not be collapsed into it.
+        """
+        try:
+            self.provenance.log_call(tool="get_run_state", args={})
+            return {"ok": True, **read_run_state(self._run_state_path())}
+        except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
+            return {"ok": False, "error": str(exc)}
 
     def _sky_log_path(self) -> Path:
         """Path of the local weather-gated sky-failure histogram under the data dir."""
@@ -1583,6 +1626,22 @@ async def get_focuser_position() -> dict:
 async def plate_solve() -> dict:
     """Plate-solve the current field and return the solution. Read-only pointing."""
     return await get_controller().plate_solve()
+
+
+@mcp.tool()
+async def get_run_state() -> dict:
+    """Is an imaging run in progress right now? Read-only; makes no device call.
+
+    Returns ``state``: ``"active"`` (a run is live), ``"idle"`` (nothing running),
+    or ``"unknown"`` (a run was recorded but its stamp is too old to trust — the
+    writer probably died mid-run). ``unknown`` is deliberately distinct from
+    ``idle`` and must not be read as "the scope is free".
+
+    Answers the question that is otherwise only inferable from a ``get_view_state``
+    timeout, which produces a confident wrong answer in exactly the wrong
+    direction.
+    """
+    return await get_controller().get_run_state()
 
 
 @mcp.tool()

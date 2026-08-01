@@ -33,6 +33,7 @@ EXPECTED_TOOLS = {
     "download_subs",
     "qa_tier1",
     "qa_tier2",
+    "get_run_state",
     "qa_session_report",
     "get_site_profile",
     "set_site_profile",
@@ -65,7 +66,7 @@ DESTRUCTIVE = {
 async def test_exactly_33_tools_with_expected_names():
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
-    assert len(tools) == 33
+    assert len(tools) == 34
     assert names == EXPECTED_TOOLS
 
 
