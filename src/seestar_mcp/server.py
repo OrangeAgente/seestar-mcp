@@ -518,8 +518,13 @@ class SeestarController:
             "target": report.target,
             "total": report.total,
             "kept": report.kept,
-            "wfwhm": report.wfwhm,
-            "medians": report.medians,
+            # Aggregates are rounded to the same precision as the per-sub metrics.
+            # They are derived from the same measurements, so emitting 16 digits
+            # here while rounding the values they summarise implied a precision
+            # difference that does not exist. Rounding happens at the WIRE
+            # boundary only — classification upstream still uses full precision.
+            "wfwhm": _round_metric(report.wfwhm),
+            "medians": {k: _round_metric(v) for k, v in (report.medians or {}).items()},
             "dominant_reject_cause": report.dominant_reject_cause,
             "subs": [
                 {
@@ -1326,6 +1331,11 @@ class SeestarController:
 _METRIC_DP = 4
 
 
+def _round_metric(value: Any) -> Any:
+    """Round a float to :data:`_METRIC_DP`; pass anything else through unchanged."""
+    return round(value, _METRIC_DP) if isinstance(value, float) else value
+
+
 def _compact_metrics(metrics: Any) -> dict:
     """Per-sub metrics for the wire: rounded, without the duplicated name.
 
@@ -1715,6 +1725,10 @@ async def qa_tier2(target: str | None = None, paths: list[str] | None = None) ->
 
     Read-only FITS analysis (photutils). Provide explicit ``paths`` or a
     ``target`` to glob the local data directory.
+
+    NOTE: ``summary.target`` echoes the ``target`` argument and is therefore
+    ``null`` whenever you call with ``paths=`` — it is not derived from the files.
+    Do not build a header on it; use your own identifier for the session.
     """
     return await get_controller().qa_tier2(target, paths)
 
