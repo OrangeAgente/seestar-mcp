@@ -32,7 +32,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -124,6 +124,12 @@ class SessionReport:
     dominant_reject_cause: str | None
     total: int
     kept: int
+    #: The cutoffs actually APPLIED to this session, as values rather than as
+    #: prose inside ``reasons``. Session-relative ones (SNR, star count, scatter,
+    #: FWHM) derive from this session's own medians, so they differ night to
+    #: night and only these can position a chart's cutoff line. ``None`` where a
+    #: threshold could not be computed (no analysable subs on that axis).
+    thresholds: dict = field(default_factory=dict)
 
 
 # --- per-sub analysis -----------------------------------------------------
@@ -314,6 +320,66 @@ def _collect(values: list[float | None]) -> np.ndarray:
     """Return finite float values from a list, dropping None / NaN."""
     arr = np.array([v for v in values if v is not None], dtype=float)
     return arr[np.isfinite(arr)]
+
+
+def _effective_thresholds(
+    settings: Settings,
+    *,
+    fwhm_median: float | None,
+    fwhm_sigma: float | None,
+    snr_median: float | None,
+    starcount_median: float | None,
+    scatter_median: float | None,
+    scatter_sigma: float | None,
+) -> dict:
+    """The cutoffs this session was actually scored against.
+
+    Mirrors the branching in :func:`_score_sub` exactly — absolute override when
+    configured, else the session-relative value — so the numbers returned are the
+    ones that produced the verdicts, not the config constants they derive from.
+    A consumer can position a cutoff line from these without parsing ``reasons``.
+
+    Every entry is ``None`` when it could not be computed (no analysable subs on
+    that axis), never a fabricated default.
+    """
+    fwhm_reject = fwhm_marginal = None
+    if settings.qa_fwhm_absolute is not None:
+        fwhm_reject = settings.qa_fwhm_absolute
+    elif fwhm_median is not None and fwhm_sigma is not None:
+        fwhm_reject = fwhm_median + settings.qa_fwhm_sigma * fwhm_sigma
+        fwhm_marginal = fwhm_median + settings.qa_fwhm_marginal_sigma * fwhm_sigma
+
+    scatter_reject = scatter_marginal = None
+    if settings.qa_scatter_absolute is not None:
+        scatter_reject = settings.qa_scatter_absolute
+    elif scatter_median is not None and scatter_sigma is not None:
+        scatter_reject = scatter_median + settings.qa_scatter_reject_sigma * scatter_sigma
+        scatter_marginal = (
+            scatter_median + settings.qa_scatter_marginal_sigma * scatter_sigma
+        )
+
+    return {
+        "eccentricity_reject": (
+            settings.qa_eccentricity_absolute
+            if settings.qa_eccentricity_absolute is not None
+            else settings.qa_eccentricity_reject
+        ),
+        "eccentricity_marginal": settings.qa_eccentricity_marginal,
+        "fwhm_reject": fwhm_reject,
+        "fwhm_marginal": fwhm_marginal,
+        "snr_floor": (
+            snr_median * settings.qa_snr_floor_factor
+            if snr_median is not None
+            else None
+        ),
+        "star_count_floor": (
+            starcount_median * settings.qa_starcount_floor_factor
+            if starcount_median is not None
+            else None
+        ),
+        "scattered_light_reject": scatter_reject,
+        "scattered_light_marginal": scatter_marginal,
+    }
 
 
 def _score_sub(
@@ -531,6 +597,12 @@ def classify(metrics: list[SubMetrics], settings: Settings) -> SessionReport:
         dominant_reject_cause=dominant,
         total=len(subs),
         kept=len(keep_list),
+        thresholds=_effective_thresholds(
+            settings,
+            fwhm_median=fwhm_median, fwhm_sigma=fwhm_sigma,
+            snr_median=snr_median, starcount_median=star_median,
+            scatter_median=scatter_median, scatter_sigma=scatter_sigma,
+        ),
     )
 
 
