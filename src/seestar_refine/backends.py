@@ -65,8 +65,17 @@ def detect_backends(
             "PixInsight not found — set SEESTAR_REFINE_PIXINSIGHT_EXE to its path."
         )
 
+    # Precedence: explicit argument > configured setting > the home convention.
+    # The setting exists so the capability report does not depend on whose home
+    # directory it runs in; the explicit argument stays first so existing callers
+    # (and tests that inject a path directly) are unaffected.
     if bridge_dir is None:
-        bridge_dir = Path.home() / ".pixinsight-mcp" / "bridge"
+        configured = getattr(settings, "pixinsight_mcp_bridge", "") or ""
+        bridge_dir = (
+            Path(configured)
+            if configured
+            else Path.home() / ".pixinsight-mcp" / "bridge"
+        )
     try:
         pixinsight_mcp = Path(bridge_dir).is_dir()
     except OSError:
