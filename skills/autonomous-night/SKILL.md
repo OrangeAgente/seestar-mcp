@@ -185,6 +185,16 @@ Non-obvious behaviors that cost real observing time when ignored.
   climbing sharply across consecutive samples — a cloud bank or something drifting into the
   light path), a **link fault** (repeated solve failures or connection errors), or a
   **guardrail stop**. Any of those warrants a decision; between them, stay quiet.
+- **Keep the tool link warm.** A long slot watched by something other than MCP tools means a
+  quiet connection, and quiet connections get dropped — a client polling continuously lived
+  8.8 h while sessions with 40–60 min silences died repeatedly. Call a **local-only** tool
+  (`get_site_profile`, `list_projects`, `get_run_state`) every ~5 min while a slot runs. They
+  read local files and cost the device nothing. The failure this prevents is arriving at a
+  target boundary with no working tool link.
+- **Check `get_run_state` after any interruption.** It answers "is a run in progress?"
+  definitively rather than by inferring from a `get_view_state` timeout — `active`, `idle`, or
+  `unknown` (a run was recorded but its stamp is stale, so the writer probably died). Treat
+  `unknown` as "find out", never as "the scope is free".
 - **Guardrails inside the slot, not just between targets.** Re-run
   `check_night_guardrails` on a slow cadence (~10 min) *during* a slot as well as at each
   boundary. Weather, dew, and battery do not wait for a slot to end, and a 45-minute slot
