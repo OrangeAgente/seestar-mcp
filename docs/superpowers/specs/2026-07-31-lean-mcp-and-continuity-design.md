@@ -74,10 +74,25 @@ Judging data quality is part of running a night; producing finished images is no
 `astroalign`, `astroscrappy`, `ccdproc` and `pillow` move to an optional dependency group so
 a default install stops carrying them.
 
-### 3. Tighten tool descriptions
+### 3. ~~Tighten tool descriptions~~ — RETRACTED 2026-08-02
 
-15,693 chars of schema has real slack. Target ~30% reduction with no loss of meaning,
-preserving every `SIDE EFFECT` label verbatim — those are a safety contract, not prose.
+**This item was wrong and is not being implemented.** It claimed "15,693 chars of schema has
+real slack" and set a ~30% target. That was asserted without reading the descriptions.
+
+Having read them, the slack is not there. The longest entries are, in order: `get_run_state`
+(the tri-state semantics a consumer needs to avoid reading `unknown` as "the scope is free"),
+`plan_targets`, `qa_tier2`, `log_sky_result` (the weather-gating rule that stops a caller
+corrupting the obstruction learner), and `check_night_guardrails`. What they contain is
+`SIDE EFFECT` labels — a safety contract — parameter formats a caller cannot guess
+(`[[az_min, az_max, alt_min], ...]`), and semantics that prevent misuse.
+
+The arithmetic does not favour cutting either: the whole surface is ~4,100 tokens **once per
+session**, so a 30% cut saves ~1,200 tokens — less than a single `list_projects(detail="full")`
+call at 2,646. Trading misuse-prevention for a one-off saving smaller than one call is a bad
+deal.
+
+Setting a percentage target before reading the text is what produced this item. Recorded
+rather than deleted, because the reasoning is the useful part.
 
 ### 4. Keepalive against the idle timeout
 
