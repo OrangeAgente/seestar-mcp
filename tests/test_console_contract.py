@@ -441,3 +441,48 @@ def test_aggregates_are_rounded_like_the_per_sub_metrics(tmp_path):
     for key, value in summary["medians"].items():
         if isinstance(value, float):
             assert value == round(value, 4), f"medians.{key} not rounded"
+
+
+def test_report_ships_the_effective_thresholds_it_applied(tmp_path):
+    """The cutoffs a verdict was made against must be FIELDS, not prose.
+
+    Requested by the Console team, and it is the eleventh instance of the pattern
+    their original work order named: if a tool states a quantity in prose, return
+    it as a field too. The numbers existed only inside reasons[] —
+    "REJECT: scattered light 0.016 > 0.014 (median + 2sigma)" — so a chart that
+    wants to draw the cutoff line had to parse a sentence, which is re-deriving a
+    verdict. They shipped without the lines rather than do that.
+
+    These must be the EFFECTIVE per-session values, not the config constants:
+    the SNR, star-count and scatter cutoffs derive from that session's own
+    medians, so two nights reject at different absolute numbers and only the
+    per-session value can position a line.
+    """
+    c = _controller(tmp_path)
+    out = asyncio.run(
+        c.qa_tier2(paths=[
+            str(FIXTURE_DIR / "good.fits"),
+            str(FIXTURE_DIR / "bad_ecc.fits"),
+            str(FIXTURE_DIR / "hazy.fits"),
+        ])
+    )
+    thresholds = out["summary"]["thresholds"]
+
+    # The two lines the eccentricity chart asked for.
+    assert thresholds["eccentricity_reject"] == 0.575
+    assert thresholds["eccentricity_marginal"] == 0.42
+
+    # Session-derived floors are present and are NOT the raw config factors.
+    for key in ("snr_floor", "star_count_floor"):
+        assert key in thresholds, f"{key} missing"
+    medians = out["summary"]["medians"]
+    if thresholds["snr_floor"] is not None and medians.get("snr"):
+        # 0.5 x median by default — a value, not the factor.
+        assert thresholds["snr_floor"] != 0.5
+        assert abs(thresholds["snr_floor"] - medians["snr"] * 0.5) < 0.01
+
+    # Rounded like every other reported float, and strict-JSON safe.
+    for key, value in thresholds.items():
+        if isinstance(value, float):
+            assert value == round(value, 4), f"thresholds.{key} not rounded"
+    json.loads(json.dumps(out, allow_nan=False))

@@ -508,7 +508,8 @@ class SeestarController:
         *distribution* (FWHM / eccentricity / SNR / star count across subs), which
         the ``medians`` aggregate cannot reconstruct, and the arrays are computed
         for the verdicts anyway — dropping them here discarded the only copy.
-        ``name`` is the stable per-sub key (the on-device filename).
+        ``name`` is the stable per-sub key. It is the filename **stem** — no
+        extension — so a join key built as ``f"{name}.fit"`` matches nothing.
 
         Every metric is nullable: a sub that could not be analyzed still appears,
         with ``metrics.error`` set. Values are finite-or-None by construction
@@ -525,6 +526,14 @@ class SeestarController:
             # boundary only — classification upstream still uses full precision.
             "wfwhm": _round_metric(report.wfwhm),
             "medians": {k: _round_metric(v) for k, v in (report.medians or {}).items()},
+            # The cutoffs this session was actually scored against, as values.
+            # They appeared only inside `reasons` prose, so a consumer wanting to
+            # draw a cutoff line had to parse a sentence — which is re-deriving a
+            # verdict. Session-relative ones move night to night.
+            "thresholds": {
+                k: _round_metric(v)
+                for k, v in (getattr(report, "thresholds", None) or {}).items()
+            },
             "dominant_reject_cause": report.dominant_reject_cause,
             "subs": [
                 {
@@ -542,8 +551,10 @@ class SeestarController:
     ) -> dict:
         """Score RAW subs (photutils FWHM/ecc/SNR/stars) into PASS/MARGINAL/REJECT.
 
-        Read-only analysis. Returns a compact per-sub verdict summary + keep-list;
-        does not dump full metrics for every sub.
+        Read-only analysis. Returns a per-sub verdict summary + keep-list. Each
+        sub carries its ``metrics`` (see :meth:`_compact_report`) so a consumer can
+        chart the session's distribution, and ``summary.thresholds`` carries the
+        cutoffs those verdicts were made against.
         """
         try:
             resolved = self._resolve_paths(target, paths)
