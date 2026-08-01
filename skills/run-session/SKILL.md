@@ -166,6 +166,13 @@ compact and phone-friendly — one line, lead with state.
   falling battery do not wait for a slot boundary — checking only between targets leaves the
   whole slot unguarded. A `park_and_stop` verdict wins immediately: end the slot and wind
   down (see `autonomous-night` Phase C).
+- **Keep the tool link warm (~every 5 min while running background work).** An MCP
+  connection that goes quiet gets dropped: a client polling continuously survived 8.8 h,
+  while sessions with 40–60 min silences died repeatedly mid-run. If you are watching a long
+  slot with something other than MCP tools, call a **local-only** tool on a slow cadence —
+  `get_site_profile`, `list_projects` or `get_run_state`. All three read local files and
+  **cost the device nothing**. Skipping this is why a target boundary arrives with no working
+  tool link and the slew has to be improvised.
 - **Sweet-band watch:** track where the current target sits in its window. When it leaves
   its sweet band — crossing the field-rotation ceiling on the way down, or dropping toward
   the altitude floor / into the horizon mask — tell the user in one line and offer the next
@@ -245,6 +252,19 @@ the session run quietly.
   integration accumulates toward the goal across nights.
 
 ## Operating notes
+- **Three tiers of traffic, not two.** What competes with the control link is anything on the
+  scope's radio — which is *not* the same as anything that goes through a tool:
+
+  | Tier | Examples | Policy |
+  |---|---|---|
+  | **Local-only** | `get_site_profile`, `list_projects`, `get_project`, `get_run_state`, `qa_tier2` on downloaded files | poll freely — reads local files, costs the device nothing |
+  | **Device-touching** | `get_status`, `get_view_state`, `get_focuser_position`, `check_night_guardrails` | back off while stacking; a slow liveness check is enough when idle |
+  | **Share-touching** | reading the scope's image share directly — thumbnails, previews, offloads | slowest tier; never a full FITS mid-session, never while idle |
+
+  The third tier is easy to miss because it generates **no tool call and no provenance
+  record** — it is invisible in the audit log while being the traffic most likely to starve
+  the link. `get_status` is also worth knowing about: it fans out to five separate device
+  reads, so it is the most expensive cheap-looking call in the set.
 - **Do NOT run a heavy file transfer off the scope's share during a session.** Pulling images
   off the scope competes with its control link and can starve it — symptoms range from a
   stalled session to the bridge failing to authenticate. Offload before the session or after
