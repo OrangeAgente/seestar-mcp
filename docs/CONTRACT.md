@@ -1,4 +1,4 @@
-# seestar-mcp consumer contract — v1.0.0
+# seestar-mcp consumer contract — v1.0.1
 
 The response shapes external consumers may rely on, and the rules for changing
 them. Enforced by `tests/test_console_contract.py`, which fails **this** repo's
@@ -60,6 +60,19 @@ it end to end.
 - **`get_run_state.state` is tri-valued** — `active` / `idle` / `unknown`.
   `unknown` means a run was recorded but its stamp is stale; it must never be read
   as "the scope is free".
+- **`get_run_state.run` is not a liveness signal.** It is populated in **two**
+  states — `active`, and `unknown` when the stamp went stale (the stale record is
+  kept deliberately: what was running when we lost track is worth knowing). It is
+  `null` only for `idle` and for an unreadable file. Branch on `state`; a non-null
+  `run` does **not** mean a session is live.
+
+## Changelog
+
+- **v1.0.1** — documented `get_run_state.run` nullability (behaviour unchanged;
+  the previous announcement said "`run: null` when idle", which is true of `idle`
+  and of an unreadable file but wrong for stale-`unknown`, the one case where the
+  record is retained *and* untrustworthy).
+- **v1.0.0** — initial contract, 9 tools.
 
 ## Timestamps — two shapes, both deliberate
 

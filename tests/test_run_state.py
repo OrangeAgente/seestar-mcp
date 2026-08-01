@@ -122,3 +122,34 @@ def test_write_is_atomic_and_leaves_no_temp_file(tmp_path):
     p = tmp_path / "run_state.json"
     write_run_state(_state(), p)
     assert [f.name for f in tmp_path.iterdir()] == ["run_state.json"]
+
+
+def test_run_is_not_a_liveness_signal(tmp_path):
+    """``run`` is populated in TWO states, so its presence proves nothing.
+
+    Reported by the Console team, who have a real recording of stale-``unknown``.
+    The stale record is retained on purpose — what was running when we lost track
+    is worth knowing — but that means a consumer branching on ``run is not None``
+    treats a dead session as live, which is the exact failure ``get_run_state``
+    exists to prevent.
+    """
+    p = tmp_path / "run_state.json"
+    write_run_state(_state(), p)
+
+    live = read_run_state(p)
+    stale = read_run_state(
+        p,
+        now_utc=(
+            datetime.now(timezone.utc) + STALE_AFTER + timedelta(minutes=1)
+        ).isoformat(),
+    )
+
+    # Populated in BOTH — indistinguishable on `run` alone.
+    assert live["run"] is not None and stale["run"] is not None
+    assert live["state"] == "active" and stale["state"] == "unknown"
+
+    # None only for idle and for an unreadable file.
+    clear_run_state(p)
+    assert read_run_state(p)["run"] is None
+    p.write_text("{not json", encoding="utf-8")
+    assert read_run_state(p)["run"] is None

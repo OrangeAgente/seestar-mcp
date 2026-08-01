@@ -676,7 +676,7 @@ def test_contract_version_is_declared_and_matches_this_suite():
     contract = (Path(__file__).parents[1] / "docs" / "CONTRACT.md").read_text(
         encoding="utf-8"
     )
-    assert "# seestar-mcp consumer contract — v1.0.0" in contract
+    assert "# seestar-mcp consumer contract — v1.0.1" in contract
     # The rules a consumer relies on must actually be stated in it.
     for rule in (
         "Required means present, not truthy",
