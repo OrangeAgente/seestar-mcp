@@ -15,6 +15,7 @@ import respx
 from seestar_mcp.planning.site import SiteProfile
 from seestar_mcp.planning.weather import (
     ConditionsAssessment,
+    MeteoblueSource,
     OpenMeteoSource,
     assess_conditions,
 )
@@ -227,3 +228,46 @@ def test_resolve_source_picks_backend():
     assert isinstance(resolve_source(""), OpenMeteoSource)
     assert isinstance(resolve_source(None), OpenMeteoSource)
     assert isinstance(resolve_source("   "), OpenMeteoSource)  # whitespace = none
+
+
+# --- credential safety (reported by the SeeStar Console team, 2026-08-01) ------
+
+_LEAK_KEY = "SUPERSECRETKEY123"
+
+
+@respx.mock
+async def test_meteoblue_http_error_never_leaks_the_api_key():
+    """A non-2xx meteoblue response must not put the API key into an exception.
+
+    httpx embeds the full request URL in ``HTTPStatusError``, and the key travels
+    as an ``apikey`` query parameter. ``HTTPStatusError`` is a SIBLING of
+    ``RequestError``, not a subclass, so a handler catching only ``RequestError``
+    lets it escape — carrying the key into the error text, the tool's error
+    envelope, and any consumer that renders it. The Console team observed exactly
+    that reaching their DOM on a 401.
+
+    A non-2xx must degrade to the same non-fatal "unknown" as any other outage.
+    """
+    respx.get(url__startswith="https://my.meteoblue.com").mock(
+        return_value=httpx.Response(401, json={"error": "unauthorized"})
+    )
+    source = MeteoblueSource(api_key=_LEAK_KEY)
+    assessment = await source.assess(SITE, WINDOW)  # must not raise
+
+    assert isinstance(assessment, ConditionsAssessment)
+    assert assessment.source == "unknown"
+    assert assessment.go is None
+    # Nothing the caller can see may echo the key.
+    assert _LEAK_KEY not in repr(assessment)
+    assert _LEAK_KEY not in " ".join(assessment.reasons)
+
+
+@respx.mock
+async def test_open_meteo_http_error_is_also_non_fatal():
+    """The keyless source needs the same guard: a 500 must not raise."""
+    respx.get(url__startswith="https://api.open-meteo.com").mock(
+        return_value=httpx.Response(500, text="upstream boom")
+    )
+    assessment = await assess_conditions(SITE, WINDOW, moon_illum_frac=0.1)
+    assert assessment.source == "unknown"
+    assert assessment.go is None

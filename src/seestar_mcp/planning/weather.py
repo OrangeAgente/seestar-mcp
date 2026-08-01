@@ -220,8 +220,11 @@ class OpenMeteoSource:
                     response = await owned.get(_FORECAST_URL, params=params)
             response.raise_for_status()
             payload = response.json()
-        except httpx.RequestError:
-            # Network-level failure (DNS, connect, timeout, read) — non-fatal.
+        except (httpx.RequestError, httpx.HTTPStatusError):
+            # Network-level failure (DNS, connect, timeout, read) OR a non-2xx
+            # status — both non-fatal. HTTPStatusError is a sibling of
+            # RequestError, not a subclass, so it must be named explicitly;
+            # it also carries the request URL, which must never escape.
             return _unknown(window_utc)
 
         try:
@@ -354,7 +357,12 @@ class MeteoblueSource:
                     response = await owned.get(_METEOBLUE_URL, params=params)
             response.raise_for_status()
             payload = response.json()
-        except httpx.RequestError:
+        except (httpx.RequestError, httpx.HTTPStatusError):
+            # HTTPStatusError is a SIBLING of RequestError, not a subclass, so it
+            # must be named explicitly. It also embeds the full request URL — and
+            # the meteoblue key rides there as ``apikey`` — so letting it escape
+            # leaks the credential into the error text and any consumer that
+            # renders it. Degrade to the same non-fatal "unknown" as any outage.
             return _unknown(window_utc)
 
         try:
