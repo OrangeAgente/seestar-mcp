@@ -676,7 +676,20 @@ def test_contract_version_is_declared_and_matches_this_suite():
     contract = (Path(__file__).parents[1] / "docs" / "CONTRACT.md").read_text(
         encoding="utf-8"
     )
-    assert "# seestar-mcp consumer contract — v1.0.1" in contract
+    title = re.search(r"^# seestar-mcp consumer contract — v(\S+)", contract, re.M)
+    assert title, "contract has no versioned title"
+    version = title.group(1)
+    assert version == "1.0.1"
+
+    # The Status table is the field a consumer actually pins against, so it must
+    # agree with the title. They drifted apart once (title said 1.0.1, the table
+    # still said 1.0.0) and the consumer had already pinned from the title — the
+    # same artifact-vs-its-own-description failure the version bump existed to fix.
+    status = re.search(r"^\|\s*\*\*Version\*\*\s*\|\s*(\S+?)\s*\|", contract, re.M)
+    assert status, "contract Status table has no Version row"
+    assert status.group(1) == version, (
+        f"Status table says {status.group(1)}, title says {version}"
+    )
     # The rules a consumer relies on must actually be stated in it.
     for rule in (
         "Required means present, not truthy",
@@ -684,3 +697,56 @@ def test_contract_version_is_declared_and_matches_this_suite():
         "if a tool names a quantity in prose",
     ):
         assert rule.lower() in contract.lower(), f"contract is missing: {rule}"
+
+
+# --- tool-level pins for the two the file was missing -----------------------
+
+
+def test_get_run_state_tool_contract(tmp_path):
+    """``run`` is not a liveness signal — pinned at the TOOL boundary.
+
+    The behaviour is covered in ``test_run_state.py``, but a consumer pins the
+    tool, not the module: the controller wrapper can drift independently. Both
+    ``active`` and stale-``unknown`` carry a ``run`` record, so branching on its
+    presence treats a dead session as live.
+    """
+    from seestar_mcp.run_state import RunState, write_run_state
+
+    c = _controller(tmp_path)
+    assert asyncio.run(c.get_run_state())["state"] == "idle"
+
+    write_run_state(
+        RunState(session_start_utc="2026-08-02T02:00:00+00:00", target="M76"),
+        tmp_path / "run_state.json",
+    )
+    out = asyncio.run(c.get_run_state())
+    _require(out, ["ok", "state", "run"], "get_run_state")
+    assert out["state"] == "active"
+    assert out["run"]["target"] == "M76"
+    # Offset-bearing, as stated to consumers.
+    assert OFFSET_ISO.match(out["stamped_utc"])
+
+
+def test_get_target_observability_tool_contract(tmp_path, monkeypatch):
+    """The TOOL wrapper's shape, not just the computation underneath it.
+
+    The invariants test exercises ``observability()`` directly; this pins what a
+    consumer actually receives, including the ``above_floor`` / ``in_sweet_band``
+    pair whose *difference* is the only way to say a target is up but too high
+    to use.
+    """
+    c = _controller(tmp_path)
+    asyncio.run(c.set_site_profile(name="Yard", lat=45.0, lon=-75.0, bortle=6))
+    out = asyncio.run(c.get_target_observability("M31"))
+
+    _require(out, ["ok", "target", "observability"], "get_target_observability")
+    if out.get("observability"):
+        _require(
+            out["observability"],
+            ["target_id", "max_alt_deg", "dark_minutes_above_floor",
+             "dark_minutes_in_sweet_band", "transits_above_ceiling",
+             "moon_sep_deg", "best_window_utc"],
+            "get_target_observability.observability",
+        )
+        obs = out["observability"]
+        assert obs["dark_minutes_in_sweet_band"] <= obs["dark_minutes_above_floor"]
