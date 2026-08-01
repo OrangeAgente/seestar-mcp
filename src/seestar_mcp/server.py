@@ -1242,19 +1242,26 @@ class SeestarController:
         except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
             return {"ok": False, "error": str(exc)}
 
-    async def recommend_projects(self, limit: int | None = None) -> dict:
+    async def recommend_projects(
+        self, limit: int | None = None, detail: str = "summary"
+    ) -> dict:
         """Active projects still needing data, most-needed first.
 
         Read-only. Answers "what should I image more of?" for the planner.
+
+        ``detail`` behaves exactly as on :meth:`list_projects` — summary omits the
+        ``sessions`` key. The parameter exists here even though the default is the
+        same, so a consumer has an escape hatch on both tools rather than one; a
+        default change with no way to opt out is a break with no remedy.
         """
         try:
             self.provenance.log_call(
-                tool="recommend_projects", args={"limit": limit}
+                tool="recommend_projects", args={"limit": limit, "detail": detail}
             )
             projects = _recommend_projects(path=self._projects_path(), limit=limit)
             return {
                 "ok": True,
-                "projects": [dataclasses.asdict(p) for p in projects],
+                "projects": [_project_payload(p, detail) for p in projects],
                 "count": len(projects),
             }
         except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
@@ -1309,7 +1316,12 @@ def _project_payload(project: Any, detail: str) -> dict:
         return data
     sessions = data.pop("sessions", []) or []
     data["sessions_count"] = len(sessions)
-    data["last_session_utc"] = sessions[-1]["date_utc"] if sessions else None
+    # max(), not sessions[-1]: now_utc is caller-supplied and nothing sorts the
+    # list on load, so a backfilled session appended after the fact would sit last
+    # while carrying an older date — and report that older date as "last".
+    data["last_session_utc"] = (
+        max(s["date_utc"] for s in sessions) if sessions else None
+    )
     return data
 
 
@@ -1784,13 +1796,16 @@ async def log_session_result(
 
 
 @mcp.tool()
-async def recommend_projects(limit: int | None = None) -> dict:
+async def recommend_projects(
+    limit: int | None = None, detail: str = "summary"
+) -> dict:
     """Recommend active projects that still need data, most-needed first.
 
     Read-only. Answers "what should I image more of tonight?". ``limit`` caps the
-    count.
+    count. ``detail="summary"`` (default) omits each project's ``sessions``
+    history; pass ``detail="full"`` for the complete records.
     """
-    return await get_controller().recommend_projects(limit)
+    return await get_controller().recommend_projects(limit, detail=detail)
 
 
 @mcp.tool()
