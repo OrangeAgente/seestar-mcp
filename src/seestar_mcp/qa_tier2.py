@@ -322,6 +322,35 @@ def _collect(values: list[float | None]) -> np.ndarray:
     return arr[np.isfinite(arr)]
 
 
+def _ecc_marginal_threshold(
+    settings: Settings,
+    ecc_median: float | None,
+    ecc_sigma: float | None,
+) -> float:
+    """The MARGINAL eccentricity line: session-relative, floored at perceptibility.
+
+    ``max(median + marginal_sigma*sigma, qa_eccentricity_marginal)``.
+
+    Eccentricity was the only metric scored against a bare constant while FWHM,
+    scattered light, SNR and star count were all session-relative. On a rig whose
+    baseline elongation exceeds the constant that constant stops discriminating:
+    measured over 970 real subs, a fixed 0.42 flagged 96.5% of a good night.
+
+    The floor keeps the original insight — distortion below ~0.42 is generally
+    imperceptible, so a rig with round stars must not have mild 1-sigma variation
+    called MARGINAL. Because the floor only ever raises the line, sessions that
+    sit below it score exactly as they did before, single-sub sessions included
+    (sigma is 0 there, so this collapses to ``max(median, floor)``).
+
+    Both :func:`_score_sub` and :func:`_effective_thresholds` call this, so the
+    reported cutoff cannot drift from the one that produced the verdicts.
+    """
+    floor = settings.qa_eccentricity_marginal
+    if ecc_median is None or ecc_sigma is None:
+        return floor
+    return max(ecc_median + settings.qa_eccentricity_marginal_sigma * ecc_sigma, floor)
+
+
 def _effective_thresholds(
     settings: Settings,
     *,
@@ -331,6 +360,8 @@ def _effective_thresholds(
     starcount_median: float | None,
     scatter_median: float | None,
     scatter_sigma: float | None,
+    ecc_median: float | None = None,
+    ecc_sigma: float | None = None,
 ) -> dict:
     """The cutoffs this session was actually scored against.
 
@@ -364,7 +395,9 @@ def _effective_thresholds(
             if settings.qa_eccentricity_absolute is not None
             else settings.qa_eccentricity_reject
         ),
-        "eccentricity_marginal": settings.qa_eccentricity_marginal,
+        "eccentricity_marginal": _ecc_marginal_threshold(
+            settings, ecc_median, ecc_sigma
+        ),
         "fwhm_reject": fwhm_reject,
         "fwhm_marginal": fwhm_marginal,
         "snr_floor": (
@@ -392,6 +425,8 @@ def _score_sub(
     starcount_median: float | None,
     scatter_median: float | None,
     scatter_sigma: float | None,
+    ecc_median: float | None = None,
+    ecc_sigma: float | None = None,
 ) -> tuple[SubVerdict, list[str]]:
     """Apply the verdict rules to one sub, building reasons + a verdict.
 
@@ -408,22 +443,34 @@ def _score_sub(
         verdict = SubVerdict(m.name, "REJECT", [f"could not analyze: {m.error}"], m)
         return verdict, [CAUSE_ERROR]
 
-    # --- Eccentricity: absolute override, else canonical 0.575 cutoff ---
+    # --- Eccentricity: absolute REJECT cutoff, session-relative MARGINAL line ---
+    # The reject line stays absolute (0.575, the canonical PixInsight cutoff);
+    # only the marginal line is session-relative. See _ecc_marginal_threshold.
     ecc_cut = (
         settings.qa_eccentricity_absolute
         if settings.qa_eccentricity_absolute is not None
         else settings.qa_eccentricity_reject
     )
+    ecc_marginal_thr = _ecc_marginal_threshold(settings, ecc_median, ecc_sigma)
     if m.eccentricity is not None:
         if m.eccentricity >= ecc_cut:
             reasons.append(
                 f"REJECT: eccentricity {m.eccentricity:.2f} >= {ecc_cut:g} cutoff"
             )
             reject_causes.append(CAUSE_ECC)
-        elif m.eccentricity >= settings.qa_eccentricity_marginal:
+        elif m.eccentricity >= ecc_marginal_thr:
+            # Name the derivation when the session median raised the line above
+            # the floor, so a high threshold is never unexplained.
+            if ecc_median is not None and ecc_marginal_thr > settings.qa_eccentricity_marginal:
+                basis = (
+                    f"(median {ecc_median:.2f} + "
+                    f"{settings.qa_eccentricity_marginal_sigma:g}sigma)"
+                )
+            else:
+                basis = "marginal"
             reasons.append(
                 f"MARGINAL: eccentricity {m.eccentricity:.2f} "
-                f">= {settings.qa_eccentricity_marginal:g} marginal"
+                f">= {ecc_marginal_thr:.2f} {basis}"
             )
             marginal = True
 
@@ -542,6 +589,9 @@ def classify(metrics: list[SubMetrics], settings: Settings) -> SessionReport:
     # Scattered-light session stats over subs that measured it (None subs skipped).
     scatter_median = float(np.median(scatter_vals)) if scatter_vals.size else None
     scatter_sigma = float(np.std(scatter_vals)) if scatter_vals.size else None
+    # Eccentricity session stats: the marginal line is median + sigma, floored.
+    ecc_median = float(np.median(ecc_vals)) if ecc_vals.size else None
+    ecc_sigma = float(np.std(ecc_vals)) if ecc_vals.size else None
 
     medians = {
         "fwhm": fwhm_median,
@@ -549,7 +599,8 @@ def classify(metrics: list[SubMetrics], settings: Settings) -> SessionReport:
         "snr": snr_median,
         "star_count": star_median,
         "hfr": float(np.median(hfr_vals)) if hfr_vals.size else None,
-        "eccentricity": float(np.median(ecc_vals)) if ecc_vals.size else None,
+        "eccentricity": ecc_median,
+        "eccentricity_sigma": ecc_sigma,
         "scattered_light": scatter_median,
         "scattered_light_sigma": scatter_sigma,
         "n_analyzed": len(good),
@@ -561,6 +612,7 @@ def classify(metrics: list[SubMetrics], settings: Settings) -> SessionReport:
             fwhm_median=fwhm_median, fwhm_sigma=fwhm_sigma,
             snr_median=snr_median, starcount_median=star_median,
             scatter_median=scatter_median, scatter_sigma=scatter_sigma,
+            ecc_median=ecc_median, ecc_sigma=ecc_sigma,
         )
         for m in metrics
     ]
@@ -602,6 +654,7 @@ def classify(metrics: list[SubMetrics], settings: Settings) -> SessionReport:
             fwhm_median=fwhm_median, fwhm_sigma=fwhm_sigma,
             snr_median=snr_median, starcount_median=star_median,
             scatter_median=scatter_median, scatter_sigma=scatter_sigma,
+            ecc_median=ecc_median, ecc_sigma=ecc_sigma,
         ),
     )
 
