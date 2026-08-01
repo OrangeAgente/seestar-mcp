@@ -28,6 +28,11 @@ class RefineSettings(BaseSettings):
     # --- external desktop-app CLIs (user-configured; validated before exec) ---
     dss_cli: str = ""  # path to DeepSkyStackerCL(.exe)
     pixinsight_exe: str = ""  # path to PixInsight(.exe)
+    # Directory of the external pixinsight-mcp file bridge. Empty = the
+    # conventional ``~/.pixinsight-mcp/bridge``. Configurable for the same reason
+    # the two CLI paths are: a hardcoded path under $HOME makes the capability
+    # report depend on whose machine it runs on, which is untestable.
+    pixinsight_mcp_bridge: str = ""
 
     # --- filesystem layout ---
     data_dir: Path = Path("./data")  # shared dir holding QA reports + subs
