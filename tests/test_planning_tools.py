@@ -599,3 +599,40 @@ def test_suggest_horizon_mask_no_site(tmp_path):
     r = asyncio.run(c.suggest_horizon_mask())
     assert r["ok"] is False
     assert "site" in r["error"].lower()
+
+
+def test_guardrails_read_battery_from_device_state_without_a_second_call(tmp_path):
+    """Battery comes from the get_device_state we already made — no pi_get_info.
+
+    HARDWARE-VERIFIED (fw 7.75): battery lives at
+    ``result.pi_status.battery_capacity`` in ``get_device_state``. A 2026-07-12
+    diagnosis correctly found it was not at the TOP level and wrongly concluded it
+    was absent entirely, so the guardrail made a second native round-trip for a
+    value it already held. Measured cost: 610 redundant device calls in one
+    dashboard session, and one extra round-trip per guardrail check — which now
+    runs every ~10 minutes INSIDE each slot, on the same link that starves under
+    load.
+    """
+    c = _controller(tmp_path)
+    asyncio.run(c.set_site_profile(name="Yard", lat=45.0, lon=-75.0, bortle=6))
+
+    calls: list[str] = []
+
+    async def _method_sync(method, params=None):
+        calls.append(method)
+        if method == "get_device_state":
+            return {
+                "result": {
+                    "device": {"is_verified": True},
+                    "pi_status": {"battery_capacity": 87, "charger_status": "Full"},
+                }
+            }
+        raise AssertionError(f"unexpected extra device call: {method}")
+
+    c.alpaca.method_sync = _method_sync
+    out = asyncio.run(c.check_night_guardrails(session_start_utc="2026-08-02T02:00:00Z"))
+
+    assert out["ok"] is True
+    assert calls == ["get_device_state"], (
+        f"exactly one device call expected; got {calls}"
+    )

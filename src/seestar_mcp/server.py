@@ -1082,18 +1082,17 @@ class SeestarController:
             # unknown) on ANY failure so a lost link parks the run. Identity comes
             # from get_device_state; battery from pi_get_info (two native calls —
             # battery is NOT in get_device_state).
+            battery: float | None = None
             try:
                 dev = await self.alpaca.method_sync("get_device_state")
                 connected, verified = _parse_device_health(dev)
+                # Battery comes from the SAME reply — see _parse_battery. A second
+                # native round-trip for it was pure waste on a link that starves
+                # under load, and guardrails now run inside each slot, not just at
+                # target boundaries.
+                battery = _parse_battery(dev)
             except Exception:  # noqa: BLE001 - any device fault → fail safe
                 connected, verified = (False, False)
-            battery: float | None = None
-            if connected:
-                try:
-                    info = await self.alpaca.method_sync("pi_get_info")
-                    battery = _parse_battery(info)
-                except Exception:  # noqa: BLE001 - battery read is best-effort
-                    battery = None
 
             # Weather is best-effort and non-fatal: an outage → unknown, which
             # the guardrail core treats as observability-only, not a hard stop.
@@ -1449,8 +1448,10 @@ def _parse_device_health(dev: Any) -> tuple[bool, bool]:
     HARDWARE-VERIFIED (2026-07-12): ``is_verified`` is nested at
     ``result.device.is_verified`` — NOT at the top level. Reading it flat made
     the guardrail always report "unverified" and false-trip ``park_and_stop``.
-    Battery is NOT in ``get_device_state`` at all (see :func:`_parse_battery`,
-    which reads ``pi_get_info``). Falls back to a flat dict for simple mocks.
+    Battery IS in this same reply, at ``result.pi_status.battery_capacity`` (see
+    :func:`_parse_battery`) — an earlier note here claimed otherwise and cost a
+    redundant ``pi_get_info`` round-trip per check. Falls back to a flat dict for
+    simple mocks.
     Any malformed/empty input fails SAFE to ``(False, False)``.
     """
     if not isinstance(dev, dict) or not dev:
@@ -1463,20 +1464,33 @@ def _parse_device_health(dev: Any) -> tuple[bool, bool]:
 
 
 def _parse_battery(info: Any) -> float | None:
-    """Extract battery percent from a ``pi_get_info`` reply.
+    """Extract battery percent from a ``get_device_state`` or ``pi_get_info`` reply.
 
-    HARDWARE-VERIFIED (2026-07-12): battery lives at
-    ``result.battery_capacity`` in ``pi_get_info`` (not ``get_device_state``).
-    Falls back to a flat dict for simple mocks; unknown/malformed → ``None``.
+    HARDWARE-VERIFIED (fw 7.75): battery is at ``result.pi_status.battery_capacity``
+    in ``get_device_state`` — the reply the guardrail already fetches for
+    connected/verified — and at ``result.battery_capacity`` in ``pi_get_info``.
+
+    A 2026-07-12 diagnosis found it was not at the *top level* of
+    ``get_device_state`` and concluded it was absent entirely, which cost a second
+    native round-trip per guardrail check (610 of them in one measured dashboard
+    session). Both shapes are accepted here so either reply works; unknown or
+    malformed input → ``None``, which the guardrail core treats as "battery
+    unknown" rather than a stop.
     """
     if not isinstance(info, dict):
         return None
     result = info.get("result")
-    src = result if isinstance(result, dict) else info
-    for key in ("battery_capacity", "battery", "bat_capacity"):
-        val = src.get(key)
-        if isinstance(val, (int, float)) and not isinstance(val, bool):
-            return float(val)
+    root = result if isinstance(result, dict) else info
+    # get_device_state nests it one level down under pi_status.
+    candidates = [root]
+    pi_status = root.get("pi_status")
+    if isinstance(pi_status, dict):
+        candidates.insert(0, pi_status)
+    for src in candidates:
+        for key in ("battery_capacity", "battery", "bat_capacity"):
+            val = src.get(key)
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                return float(val)
     return None
 
 
