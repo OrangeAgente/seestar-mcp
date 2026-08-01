@@ -80,7 +80,14 @@ class Settings(BaseSettings):
     qa_fwhm_sigma: float = 1.5  # REJECT if FWHM > median + this*sigma
     qa_fwhm_marginal_sigma: float = 1.0
     qa_eccentricity_reject: float = 0.575  # canonical PixInsight cutoff
+    # Perceptibility FLOOR, not the threshold itself: distortion below ~0.42 is
+    # generally imperceptible, so MARGINAL never fires beneath this. The line
+    # actually applied is max(median + marginal_sigma*sigma, this) -- an alt-az
+    # rig baselines near 0.49, and a fixed 0.42 graded 96.5% of a good night
+    # MARGINAL. See docs/superpowers/specs/
+    # 2026-08-01-eccentricity-marginal-saturation.md
     qa_eccentricity_marginal: float = 0.42
+    qa_eccentricity_marginal_sigma: float = 1.0  # matches qa_fwhm_marginal_sigma
     qa_snr_floor_factor: float = 0.5  # REJECT if SNR < median*this
     qa_starcount_floor_factor: float = 0.5
     qa_fwhm_absolute: float | None = None  # absolute override; None = session-relative

@@ -464,3 +464,91 @@ def test_write_report_writes_both_files(tmp_path):
     assert md_path.suffix == ".md" and json_path.suffix == ".json"
     json.loads(json_path.read_text(encoding="utf-8"))  # valid JSON
     assert "wFWHM" in md_path.read_text(encoding="utf-8")
+
+
+# --- eccentricity marginal: session-relative with a perceptibility floor ---
+# Measured 2026-08-01 on 970 real subs: an alt-az S50 baselines at ecc ~0.49, so
+# a fixed 0.42 marginal line flagged 96.5% of a good night and MARGINAL became a
+# constant. The line is now max(median + 1.0*sigma, 0.42): it rises for a rig
+# whose own baseline exceeds the floor, and is unchanged for every rig below it.
+# See docs/superpowers/specs/2026-08-01-eccentricity-marginal-saturation.md
+
+
+def _ecc_marginal_count(report) -> int:
+    return sum(
+        1 for v in report.subs
+        for r in v.reasons
+        if r.startswith("MARGINAL: eccentricity")
+    )
+
+
+def test_ecc_marginal_line_rises_above_a_saturating_baseline():
+    """A rig whose baseline elongation exceeds 0.42 must not grade ~everything MARGINAL."""
+    settings = _settings()
+    # Mirrors the real distribution: median ~0.49, sigma ~0.04.
+    values = [0.45, 0.47, 0.48, 0.49, 0.49, 0.50, 0.51, 0.52, 0.53, 0.55]
+    metrics = [_clean(f"s{i}", eccentricity=e) for i, e in enumerate(values)]
+    report = classify(metrics, settings)
+
+    thr = report.thresholds["eccentricity_marginal"]
+    assert thr > 0.42, "threshold must adapt upward, not sit below the rig's floor"
+    # Under the old fixed line every one of these was MARGINAL.
+    assert _ecc_marginal_count(report) < len(values) / 2, (
+        f"{_ecc_marginal_count(report)}/{len(values)} still marginal at thr={thr}"
+    )
+
+
+def test_ecc_marginal_floor_holds_for_a_rig_with_round_stars():
+    """REGRESSION: a rig below the perceptibility floor keeps the old 0.42 behavior.
+
+    The floor is the whole point of the original constant — mild variation on a
+    well-performing rig must not become MARGINAL just because it is 1 sigma out.
+    """
+    settings = _settings()
+    values = [0.14, 0.15, 0.15, 0.16, 0.16, 0.17, 0.18, 0.19]
+    report = classify(
+        [_clean(f"s{i}", eccentricity=e) for i, e in enumerate(values)], settings
+    )
+    assert report.thresholds["eccentricity_marginal"] == 0.42
+    assert _ecc_marginal_count(report) == 0
+
+    # And a genuinely elongated sub in that same session still trips the floor.
+    report2 = classify(
+        [_clean(f"s{i}", eccentricity=e) for i, e in enumerate(values)]
+        + [_clean("elongated", eccentricity=0.45)],
+        settings,
+    )
+    assert report2.thresholds["eccentricity_marginal"] == 0.42
+    assert _ecc_marginal_count(report2) == 1
+
+
+def test_ecc_marginal_single_sub_is_unchanged():
+    """REGRESSION: sigma is 0 for one sub, so max(median, 0.42) reproduces the old line."""
+    settings = _settings()
+    assert _ecc_marginal_count(classify([_clean("a", eccentricity=0.35)], settings)) == 0
+    assert _ecc_marginal_count(classify([_clean("a", eccentricity=0.49)], settings)) == 1
+
+
+def test_ecc_reject_line_stays_absolute():
+    """REGRESSION: 0.575 is the canonical PixInsight cutoff and does not move."""
+    settings = _settings()
+    values = [0.45, 0.47, 0.49, 0.51, 0.53, 0.55]
+    report = classify(
+        [_clean(f"s{i}", eccentricity=e) for i, e in enumerate(values)]
+        + [_clean("bad", eccentricity=0.61)],
+        settings,
+    )
+    assert report.thresholds["eccentricity_reject"] == 0.575
+    verdicts = {v.name: v for v in report.subs}
+    assert verdicts["bad"].verdict == "REJECT"
+
+
+def test_ecc_sigma_is_reported():
+    """The sigma the threshold derives from must reach the caller (CLAUDE.md convention)."""
+    settings = _settings()
+    report = classify(
+        [_clean(f"s{i}", eccentricity=e) for i, e in enumerate([0.45, 0.49, 0.53])],
+        settings,
+    )
+    assert report.medians["eccentricity_sigma"] is not None
+    assert report.medians["eccentricity_sigma"] > 0

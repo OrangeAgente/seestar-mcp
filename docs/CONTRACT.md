@@ -1,4 +1,4 @@
-# seestar-mcp consumer contract — v1.0.1
+# seestar-mcp consumer contract — v1.1.0
 
 The response shapes external consumers may rely on, and the rules for changing
 them. Enforced by `tests/test_console_contract.py`, which fails **this** repo's
@@ -11,7 +11,7 @@ it end to end.
 
 | | |
 |---|---|
-| **Version** | 1.0.1 |
+| **Version** | 1.1.0 |
 | **Covers** | 10 of 34 tools — the ones a consumer actually parses |
 | **Validated against a real consumer** | yes — the SeeStar Console parsed a real 25-sub `qa_tier2` payload with an independently written schema, first try, no changes |
 | **Enforced by** | `tests/test_console_contract.py` (19 tests, all 10 pinned at the tool boundary) |
@@ -53,6 +53,11 @@ it end to end.
 - **`summary.thresholds` carries the cutoffs actually applied**, session-relative
   ones included — they move night to night, so only these can position a chart's
   cutoff line.
+- **`thresholds.eccentricity_marginal` is session-derived as of v1.1.0.** It was
+  a fixed 0.42; it is now `max(median + 1.0σ, 0.42)`. No shape change and no
+  schema break — but a chart that *hardcoded* 0.42 rather than reading the field
+  now draws its line in the wrong place. `eccentricity_reject` is unchanged and
+  stays absolute at 0.575.
 - **`qa_tier2.summary.target` echoes the `target` argument**, so it is `null`
   whenever a caller uses `paths=`. Do not build a header on it.
 - **`list_projects` / `recommend_projects` default to `detail="summary"`**, which
@@ -68,6 +73,20 @@ it end to end.
 
 ## Changelog
 
+- **v1.1.0** — `thresholds.eccentricity_marginal` became session-derived
+  (`max(median + 1.0σ, 0.42)`), and `qa_tier2.summary.medians` gained
+  `eccentricity_sigma`. MINOR, not MAJOR: the key, its unit (eccentricity
+  fraction) and its meaning ("the marginal cutoff this session was scored
+  against") are unchanged, and this document already told consumers the
+  `thresholds` object moves night to night. Flagged prominently anyway, because
+  the Console's eccentricity chart is built on this exact field.
+  *Why:* measured over 970 real subs, the fixed 0.42 line graded 96.5% of a good
+  night MARGINAL — an alt-az S50 baselines near 0.49, so the constant sat at the
+  1st percentile of the rig's own output and MARGINAL stopped discriminating.
+  Verdict impact, re-scoring the same 970 subs: PASS 25→710, MARGINAL 831→146,
+  **REJECT 114→114 and all three keep-lists byte-identical** — the fix moves the
+  signal, not the stacking decisions. See
+  `docs/superpowers/specs/2026-08-01-eccentricity-marginal-saturation.md`.
 - **v1.0.1** — documented `get_run_state.run` nullability (behaviour unchanged;
   the previous announcement said "`run: null` when idle", which is true of `idle`
   and of an unreadable file but wrong for stale-`unknown`, the one case where the
