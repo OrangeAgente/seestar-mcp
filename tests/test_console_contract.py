@@ -119,13 +119,24 @@ def test_get_view_state_preserves_the_annotation_nesting(tmp_path):
     }
 
     view = asyncio.run(c.get_view_state())["view_state"]["result"]["View"]
-    _require(view, ["stage", "target_name", "lp_filter", "Stack"], "View")
+
+    # NOTE: fields on View are deliberately NOT _require()d. A real mid-acquisition
+    # payload carries `Initialise` and `stage` but NO `Stack` key at all (observed
+    # on hardware 2026-07-31 during a 3PPA alignment), and the Console schema has
+    # them nullish for the same reason. Pinning presence here would fail on a
+    # legitimate payload, and the natural fix — deleting the pin — would take the
+    # nesting assertions below with it. The NESTING is the contract; the presence
+    # of any given field is not.
     _require(view["Stack"], ["stacked_frame", "dropped_frame"], "View.Stack")
 
     annotate = view["Stack"]["Annotate"]
     _require(annotate, ["result"], "Stack.Annotate")
     ann = annotate["result"]["annotations"][0]
-    _require(ann, ["type", "names", "pixelx", "pixely", "radius"], "annotations[]")
+    # Position lives INSIDE result.annotations[], not flat on Annotate — that is
+    # the shape that bit them. Presence of individual keys is not pinned.
+    assert {"pixelx", "pixely", "radius"} <= set(ann), (
+        "plate-solve position must stay inside result.annotations[]"
+    )
     # image_size is consumed as a two-element array to scale the overlay.
     assert len(annotate["result"]["image_size"]) == 2
 
@@ -210,7 +221,8 @@ def test_list_projects_carries_full_session_history(tmp_path):
     c = _controller(tmp_path)
     asyncio.run(c.log_session_result("M76", 102.3, 614, 614, notes="clean"))
 
-    out = asyncio.run(c.list_projects())
+    # detail="full" is what carries sessions[]; summary omits the key by design.
+    out = asyncio.run(c.list_projects(detail="full"))
     _require(out, ["ok", "projects", "count"], "list_projects")
 
     project = out["projects"][0]
@@ -257,7 +269,80 @@ def test_timestamp_shapes_are_pinned_per_layer(tmp_path):
     # Projects layer: OFFSET-BEARING.
     c = _controller(tmp_path)
     asyncio.run(c.log_session_result("M76", 10.0, 60, 60))
-    session = asyncio.run(c.list_projects())["projects"][0]["sessions"][0]
+    session = asyncio.run(c.list_projects(detail="full"))["projects"][0]["sessions"][0]
     assert OFFSET_ISO.match(session["date_utc"]), (
         f"projects timestamps are offset-bearing; got {session['date_utc']!r}"
     )
+
+
+# --- get_target_observability: invariants, not presence ---------------------
+
+
+def test_observability_minutes_are_invariant_not_merely_present():
+    """Pin the QUANTITY, not the key — presence cannot see semantic drift.
+
+    The Console turns these values into geometry: the sweet-band timeline is
+    positioned by arithmetic on the dark window and the ``dark_minutes_*`` pair.
+    A units change (minutes → seconds), a sign flip, or a reference-frame change
+    yields a number that is present, numeric, plausible and WRONG, and they draw a
+    picture that looks correct. There is no absent state to fall back on, so
+    ``_require`` is structurally blind to exactly the failure that matters here.
+
+    Two of the three invariants they proposed hold. The third referenced a
+    ``dark_minutes_total`` field that does not exist; the real upper bound is the
+    dark window itself, which is both available and a stronger check — it ties the
+    integrated minutes to the interval they were integrated over.
+    """
+    from datetime import datetime
+
+    from seestar_mcp.planning.astro import dark_window, observability
+    from seestar_mcp.planning.catalog import find_target
+    from seestar_mcp.planning.site import SiteProfile
+
+    site = SiteProfile(name="x", lat_deg=45.0, lon_deg=-75.0)
+    when = "2026-08-01T04:00:00Z"
+    obs = observability(site, find_target("M31"), when)
+
+    # 1. Minutes, non-negative.
+    assert obs.dark_minutes_above_floor >= 0
+    assert obs.dark_minutes_in_sweet_band >= 0
+
+    # 2. Bounded by the dark window they are integrated over (replaces the
+    #    proposed dark_minutes_total, which is not a field we emit).
+    start, end = dark_window(site, when)
+    window_min = (
+        datetime.fromisoformat(end) - datetime.fromisoformat(start)
+    ).total_seconds() / 60.0
+    assert obs.dark_minutes_above_floor <= window_min + 2.0, (  # +1 sample of slack
+        "minutes above the floor cannot exceed the dark window"
+    )
+
+    # 3. The sweet band is a SUBSET of above-floor, so it can never exceed it.
+    #    Structural, not incidental — astro.py builds `sweet` as `above_floor`
+    #    with the ceiling condition ANDed on.
+    assert obs.dark_minutes_in_sweet_band <= obs.dark_minutes_above_floor
+
+    # A units change to seconds would break (2); a sign flip breaks (1); a
+    # reference-frame change that lifts the target out of the window breaks (2).
+
+
+def test_summary_omits_sessions_rather_than_emptying_it(tmp_path):
+    """``detail="summary"`` must REMOVE the key, not return an empty list.
+
+    An empty list parses cleanly and renders an empty history table — silently
+    wrong, and indistinguishable from a project that genuinely has no sessions.
+    Omission makes a consumer that needs the history fail loudly instead. This is
+    the same argument that applies to ``targets_remaining`` in run_state.
+    """
+    c = _controller(tmp_path)
+    asyncio.run(c.log_session_result("M76", 102.3, 614, 614, notes="clean"))
+
+    summary = asyncio.run(c.list_projects())["projects"][0]
+    assert "sessions" not in summary, "summary must omit the key, not empty it"
+    assert summary["sessions_count"] == 1
+    assert summary["last_session_utc"] is not None
+
+    # detail="full" reproduces the historical payload exactly.
+    full = asyncio.run(c.list_projects(detail="full"))["projects"][0]
+    _require(full, ["sessions"], "list_projects(detail=full)")
+    assert len(full["sessions"]) == 1

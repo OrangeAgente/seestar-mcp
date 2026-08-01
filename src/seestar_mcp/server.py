@@ -1124,17 +1124,27 @@ class SeestarController:
 
     # --- projects ---------------------------------------------------------
 
-    async def list_projects(self) -> dict:
+    async def list_projects(self, detail: str = "summary") -> dict:
         """Return every persisted project (goals + accumulated integration).
 
         Read-only. Degrades to an empty list when no store exists yet.
+
+        ``detail="summary"`` (the default) **omits the ``sessions`` key entirely**
+        rather than returning an empty list. The full history grows without bound
+        — a mature store costs thousands of tokens per call — but an empty list
+        would parse cleanly and silently render an empty history table, which is a
+        worse failure than a loud one. Omission makes a consumer that needs the
+        history fail immediately and obviously. Pass ``detail="full"`` for the
+        complete records; that shape is byte-identical to the historical payload.
         """
         try:
-            self.provenance.log_call(tool="list_projects", args={})
+            self.provenance.log_call(tool="list_projects", args={"detail": detail})
             projects = load_projects(self._projects_path())
             return {
                 "ok": True,
-                "projects": [dataclasses.asdict(p) for p in projects.values()],
+                "projects": [
+                    _project_payload(p, detail) for p in projects.values()
+                ],
                 "count": len(projects),
             }
         except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
@@ -1280,6 +1290,27 @@ def _compact_metrics(metrics: Any) -> dict:
             continue  # already the sub's key
         out[key] = round(value, _METRIC_DP) if isinstance(value, float) else value
     return out
+
+
+def _project_payload(project: Any, detail: str) -> dict:
+    """One project for the wire, at the requested level of detail.
+
+    ``detail="full"`` reproduces the historical payload exactly, including the
+    complete ``sessions`` list. ``detail="summary"`` **removes the ``sessions``
+    key** and adds ``sessions_count`` plus ``last_session_utc`` in its place.
+
+    Removing the key rather than emptying it is deliberate: a consumer that needs
+    the history then fails to parse and says so, instead of parsing happily and
+    rendering an empty table. An empty list is indistinguishable from "this
+    project has no sessions", which is a real and different state.
+    """
+    data = dataclasses.asdict(project)
+    if detail == "full":
+        return data
+    sessions = data.pop("sessions", []) or []
+    data["sessions_count"] = len(sessions)
+    data["last_session_utc"] = sessions[-1]["date_utc"] if sessions else None
+    return data
 
 
 def _latest_median_fwhm(data_dir: Path | str, target: str) -> float | None:
@@ -1701,12 +1732,15 @@ async def plan_targets(
 
 
 @mcp.tool()
-async def list_projects() -> dict:
+async def list_projects(detail: str = "summary") -> dict:
     """List all imaging projects with their goals and accumulated integration.
 
-    Read-only. Empty when no projects have been created yet.
+    Read-only. Empty when no projects have been created yet. ``detail="summary"``
+    (default) omits each project's ``sessions`` history, replacing it with
+    ``sessions_count`` and ``last_session_utc``; pass ``detail="full"`` for the
+    complete session records.
     """
-    return await get_controller().list_projects()
+    return await get_controller().list_projects(detail=detail)
 
 
 @mcp.tool()
