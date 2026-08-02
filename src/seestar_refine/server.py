@@ -178,16 +178,27 @@ class RefineController:
             if result.ok and result.master_path:
                 master = Path(result.master_path)
                 out_png = Path(self.settings.output_dir) / f"{master.stem}.png"
-                # autocrop=False deliberately: the stacker already cropped this
-                # master using the real per-pixel coverage array, taking the
-                # BOUNDING BOX so an off-centre or diagonal object survives
-                # (pystack._coverage_crop). autocrop re-derives validity from
-                # luminance alone and takes the largest INSCRIBED rectangle,
-                # which on a field-rotated footprint is far smaller and silently
-                # undoes that choice - it discarded M76 from a real 537-sub
-                # stack. stretch_master below keeps autocrop on: it takes an
-                # arbitrary FITS with no coverage information.
-                preview = make_preview(master, out_png, params={"autocrop": False})
+                # Whether to autocrop depends on WHICH stacker ran, so branch on
+                # the result rather than disabling it outright.
+                #
+                # pystack already cropped its master from the real per-pixel
+                # coverage array, taking the BOUNDING BOX so an off-centre or
+                # diagonal object survives (pystack._coverage_crop). Re-cropping
+                # that with autocrop's largest-INSCRIBED rectangle, re-derived
+                # from luminance alone, silently undoes the choice — it
+                # discarded M76 from a real 537-sub stack.
+                #
+                # DSS does NOT crop, so its master still carries the raw
+                # field-rotation border and autocrop is the only thing that
+                # trims it. Disabling it there would leave black wedges around
+                # every DSS preview.
+                #
+                # stretch_master likewise keeps autocrop on: an arbitrary FITS
+                # carries no coverage information.
+                autocrop = result.engine != "pystack"
+                preview = make_preview(
+                    master, out_png, params={"autocrop": autocrop}
+                )
                 if preview.get("ok"):
                     result.preview_path = preview["preview_path"]
                 else:
