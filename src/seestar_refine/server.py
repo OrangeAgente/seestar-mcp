@@ -178,7 +178,16 @@ class RefineController:
             if result.ok and result.master_path:
                 master = Path(result.master_path)
                 out_png = Path(self.settings.output_dir) / f"{master.stem}.png"
-                preview = make_preview(master, out_png)
+                # autocrop=False deliberately: the stacker already cropped this
+                # master using the real per-pixel coverage array, taking the
+                # BOUNDING BOX so an off-centre or diagonal object survives
+                # (pystack._coverage_crop). autocrop re-derives validity from
+                # luminance alone and takes the largest INSCRIBED rectangle,
+                # which on a field-rotated footprint is far smaller and silently
+                # undoes that choice - it discarded M76 from a real 537-sub
+                # stack. stretch_master below keeps autocrop on: it takes an
+                # arbitrary FITS with no coverage information.
+                preview = make_preview(master, out_png, params={"autocrop": False})
                 if preview.get("ok"):
                     result.preview_path = preview["preview_path"]
                 else:
