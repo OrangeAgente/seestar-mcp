@@ -120,15 +120,50 @@ rig.
 
 ## Also measured: the real Console payload
 
-`_compact_report` was sized on real sessions for the first time, replacing an
-arithmetic estimate:
+**Correction (2026-08-01, after Console review).** An earlier version of this
+section claimed the 412 KB figure in
+`docs/2026-07-31-response-to-console-handback.md` was "an arithmetic estimate,
+high by ~50%". Both halves of that were wrong, and the Console team caught it:
+
+- **412 KB was already a measurement**, not an estimate — that document says so
+  in bold, gives its per-verdict basis (298 B PASS / 320 B REJECT), and records
+  that it *replaced* an earlier ~140 KB estimate for being 3× off.
+- **412 KB was for 1400 subs**, not for a night of 970. Comparing a 970-sub total
+  against it and calling the difference an error was a scope mistake. 278 B/sub
+  × 1400 = ~380 KB, which *corroborates* 412 KB rather than refuting it.
+
+The sharpest evidence that the retraction was self-refuting: that document's table
+says 200 subs → ~59 KB. This one measured 206 subs → 58.8 KB. It reproduced the
+table it was retracting to within 0.3%.
+
+Measured on the shipped `_compact_report` payload, 970 real subs:
 
 | session | subs | payload | per sub |
 |---|---|---|---|
-| NGC7635 | 149 | 42.6 KB | 293 B |
-| NGC7380 | 206 | 58.8 KB | 292 B |
-| M76 | 615 | 172.2 KB | 287 B |
+| NGC7635 | 149 | 41.2 KB | 283 B |
+| NGC7380 | 206 | 56.7 KB | 282 B |
+| M76 | 615 | 165.6 KB | 276 B |
 
-**~290 B/sub**, stable across session sizes. The whole 970-sub night is 274 KB —
-the earlier 412 KB estimate was high by ~50%. A 615-sub session, the largest this
-rig produces in a night, costs the Console 172 KB.
+Per verdict — **cost rises with verdict severity, because reason strings dominate
+and a PASS carries none**:
+
+| verdict | n | B/sub |
+|---|---|---|
+| PASS | 710 | 264 |
+| MARGINAL | 146 | 294 |
+| REJECT | 114 | 323 |
+
+REJECT at 323 B lands on the original document's measured 320 B. Two
+independently written serializers (ours and the Console's) agree within 5–7% once
+session mix is accounted for.
+
+**Design against ~412 KB at 1400 subs; the Console's slice-4 decision to make the
+analysis a cached background job stands.** Two consequences of the per-verdict
+spread are worth stating explicitly:
+
+- The eccentricity fix above *reduced* payload — converting MARGINAL to PASS
+  removes reason strings (970 subs: 371.7 → 361.4 KB reconstructed).
+- **Payload peaks on bad nights.** A cloud-hit, reject-heavy session is the
+  largest *and* the one whose analysis matters most. Any sizing done on a good
+  night's mix understates the worst case, which is the case the design must hold
+  for. This makes the background-job decision more justified, not less.
