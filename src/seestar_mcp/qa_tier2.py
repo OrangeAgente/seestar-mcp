@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -322,14 +323,30 @@ def _collect(values: list[float | None]) -> np.ndarray:
     return arr[np.isfinite(arr)]
 
 
+def _ecc_reject_cut(settings: Settings) -> float:
+    """The effective REJECT eccentricity cutoff: absolute override, else 0.575."""
+    cut = (
+        settings.qa_eccentricity_absolute
+        if settings.qa_eccentricity_absolute is not None
+        else settings.qa_eccentricity_reject
+    )
+    return cut if _is_finite(cut) else 0.575
+
+
+def _is_finite(value: float | None) -> bool:
+    """True only for a real, finite number (rejects None / NaN / +-inf)."""
+    return value is not None and math.isfinite(value)
+
+
 def _ecc_marginal_threshold(
     settings: Settings,
     ecc_median: float | None,
     ecc_sigma: float | None,
 ) -> float:
-    """The MARGINAL eccentricity line: session-relative, floored at perceptibility.
+    """The MARGINAL eccentricity line: session-relative, floored, and capped.
 
-    ``max(median + marginal_sigma*sigma, qa_eccentricity_marginal)``.
+    ``min(max(median + marginal_sigma*sigma, floor), reject_cut)``, or
+    ``qa_eccentricity_marginal_absolute`` when that is configured.
 
     Eccentricity was the only metric scored against a bare constant while FWHM,
     scattered light, SNR and star count were all session-relative. On a rig whose
@@ -342,13 +359,49 @@ def _ecc_marginal_threshold(
     sit below it score exactly as they did before, single-sub sessions included
     (sigma is 0 there, so this collapses to ``max(median, floor)``).
 
-    Both :func:`_score_sub` and :func:`_effective_thresholds` call this, so the
-    reported cutoff cannot drift from the one that produced the verdicts.
+    Two guards, both added 2026-08-02 after adversarial review found the line
+    could silently erase its own tier:
+
+    * **Capped at the REJECT cutoff.** On a session whose median sits near 0.575
+      the derived line could exceed it, so every sub landed PASS or REJECT and
+      MARGINAL became unreachable — precisely on the poor session where the
+      warning matters most. The cap tracks ``qa_eccentricity_absolute`` when set,
+      not the 0.575 default.
+    * **Finite or fall back.** ``max(nan, floor)`` is ``nan`` and ``x >= nan`` is
+      always False, so one non-finite setting silently disabled the rule *and*
+      would later make the strict-JSON renderer raise. Non-finite inputs now
+      degrade to the nearest sane value rather than poisoning the comparison.
+
+    Never raises; always returns a finite float.
     """
+    absolute = settings.qa_eccentricity_marginal_absolute
     floor = settings.qa_eccentricity_marginal
-    if ecc_median is None or ecc_sigma is None:
-        return floor
-    return max(ecc_median + settings.qa_eccentricity_marginal_sigma * ecc_sigma, floor)
+    if not _is_finite(floor):
+        floor = 0.42
+    reject_cut = _ecc_reject_cut(settings)
+
+    if absolute is not None:
+        # An explicit cutoff wins outright, but may not invert past REJECT.
+        return min(absolute, reject_cut) if _is_finite(absolute) else floor
+
+    if not _is_finite(ecc_median) or not _is_finite(ecc_sigma):
+        return min(floor, reject_cut)
+
+    sigma_k = settings.qa_eccentricity_marginal_sigma
+    if not _is_finite(sigma_k):
+        return min(floor, reject_cut)
+
+    candidate = ecc_median + sigma_k * ecc_sigma
+    if not _is_finite(candidate):
+        return min(floor, reject_cut)
+    if candidate >= reject_cut:
+        # The session's own typical sub is at or past the absolute reject line,
+        # so "worse than typical here" no longer describes anything useful —
+        # relative grading has run out of room. Fall back to the absolute floor
+        # rather than capping at reject, which would leave the MARGINAL band
+        # empty and silently grade a 0.574 sub PASS on a session this poor.
+        return min(floor, reject_cut)
+    return min(max(candidate, floor), reject_cut)
 
 
 def _effective_thresholds(
@@ -362,6 +415,7 @@ def _effective_thresholds(
     scatter_sigma: float | None,
     ecc_median: float | None = None,
     ecc_sigma: float | None = None,
+    ecc_marginal_thr: float | None = None,
 ) -> dict:
     """The cutoffs this session was actually scored against.
 
@@ -395,8 +449,12 @@ def _effective_thresholds(
             if settings.qa_eccentricity_absolute is not None
             else settings.qa_eccentricity_reject
         ),
-        "eccentricity_marginal": _ecc_marginal_threshold(
-            settings, ecc_median, ecc_sigma
+        # classify passes the cutoff it actually scored with; the fallback keeps
+        # this function correct for direct callers.
+        "eccentricity_marginal": (
+            ecc_marginal_thr
+            if ecc_marginal_thr is not None
+            else _ecc_marginal_threshold(settings, ecc_median, ecc_sigma)
         ),
         "fwhm_reject": fwhm_reject,
         "fwhm_marginal": fwhm_marginal,
@@ -427,6 +485,7 @@ def _score_sub(
     scatter_sigma: float | None,
     ecc_median: float | None = None,
     ecc_sigma: float | None = None,
+    ecc_marginal_thr: float | None = None,
 ) -> tuple[SubVerdict, list[str]]:
     """Apply the verdict rules to one sub, building reasons + a verdict.
 
@@ -446,12 +505,9 @@ def _score_sub(
     # --- Eccentricity: absolute REJECT cutoff, session-relative MARGINAL line ---
     # The reject line stays absolute (0.575, the canonical PixInsight cutoff);
     # only the marginal line is session-relative. See _ecc_marginal_threshold.
-    ecc_cut = (
-        settings.qa_eccentricity_absolute
-        if settings.qa_eccentricity_absolute is not None
-        else settings.qa_eccentricity_reject
-    )
-    ecc_marginal_thr = _ecc_marginal_threshold(settings, ecc_median, ecc_sigma)
+    ecc_cut = _ecc_reject_cut(settings)
+    if ecc_marginal_thr is None:
+        ecc_marginal_thr = _ecc_marginal_threshold(settings, ecc_median, ecc_sigma)
     if m.eccentricity is not None:
         if m.eccentricity >= ecc_cut:
             reasons.append(
@@ -592,6 +648,11 @@ def classify(metrics: list[SubMetrics], settings: Settings) -> SessionReport:
     # Eccentricity session stats: the marginal line is median + sigma, floored.
     ecc_median = float(np.median(ecc_vals)) if ecc_vals.size else None
     ecc_sigma = float(np.std(ecc_vals)) if ecc_vals.size else None
+    # Computed ONCE and handed to both the scorer and the threshold report, so
+    # the cutoff that produced the verdicts and the cutoff we publish are the
+    # same object. Sharing a helper only removed drift inside the calculation —
+    # two callers could still pass it different medians.
+    ecc_marginal_thr = _ecc_marginal_threshold(settings, ecc_median, ecc_sigma)
 
     medians = {
         "fwhm": fwhm_median,
@@ -613,6 +674,7 @@ def classify(metrics: list[SubMetrics], settings: Settings) -> SessionReport:
             snr_median=snr_median, starcount_median=star_median,
             scatter_median=scatter_median, scatter_sigma=scatter_sigma,
             ecc_median=ecc_median, ecc_sigma=ecc_sigma,
+            ecc_marginal_thr=ecc_marginal_thr,
         )
         for m in metrics
     ]
@@ -655,6 +717,7 @@ def classify(metrics: list[SubMetrics], settings: Settings) -> SessionReport:
             snr_median=snr_median, starcount_median=star_median,
             scatter_median=scatter_median, scatter_sigma=scatter_sigma,
             ecc_median=ecc_median, ecc_sigma=ecc_sigma,
+            ecc_marginal_thr=ecc_marginal_thr,
         ),
     )
 

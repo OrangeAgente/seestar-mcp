@@ -118,6 +118,49 @@ The reject line was left alone. At 0.575 it sits above p99 and fires on 4.4% —
 measured as correct, and moving it risks emptying a keep-list on a genuinely poor
 rig.
 
+## Hardening after adversarial review (2026-08-02, contract v1.1.1)
+
+An adversarial pass over the shipped commit found two medium defects. Both were
+real; neither changed any verdict on the 970-sub reference night (re-scored
+byte-identical), but both could bite another rig.
+
+**1. A configured `qa_eccentricity_marginal` was silently demoted to a floor.**
+Before the change that setting *was* the exact cutoff. Afterwards someone who had
+raised it to 0.50 found their explicit policy widened — the derived line could
+sit above it — and `qa_eccentricity_absolute` was no escape hatch because it only
+overrides REJECT. Fixed by adding **`qa_eccentricity_marginal_absolute`**, which
+bypasses the session-relative calculation entirely, mirroring the existing
+`qa_fwhm_absolute` / `qa_scatter_absolute` convention. The default path is
+unchanged, so the saturation fix stands.
+
+**2. The derived line could invert past REJECT, or go NaN.**
+On a session whose median sits near 0.575 the derived line exceeded the reject
+cutoff, so every sub landed PASS or REJECT and MARGINAL became unreachable —
+precisely on the poor night where the warning matters. Separately,
+`max(nan, floor)` is `nan` and `x >= nan` is always False, so a single non-finite
+setting silently disabled the rule *and* would have made the strict-RFC-8259
+`render_json` raise, violating the never-raise convention.
+
+The fix is not a simple cap. Capping at REJECT still leaves the band empty and
+grades a 0.574 sub PASS. Instead: **when the derived line would reach the reject
+cutoff, fall back to the absolute floor.** The reasoning is that "worse than
+typical for this session" has stopped describing anything useful once the typical
+sub is itself past the absolute reject line — relative grading has run out of
+room, so revert to the absolute perceptibility rule. On that poor session
+everything perceptibly elongated is now MARGINAL and nothing is silently PASS.
+The discontinuity is deliberate and is the signal.
+
+All threshold inputs are now finiteness-guarded, and `_ecc_reject_cut` is shared
+so the cap tracks a configured `qa_eccentricity_absolute` rather than the 0.575
+default.
+
+**Also fixed: the drift guarantee was overstated.** The commit claimed sharing one
+helper meant the reported cutoff could not diverge from the one that scored the
+subs. Sharing removed drift *inside* the calculation, not at the call sites — two
+callers could still pass different medians. `classify` now computes the cutoff
+**once** and passes the value to both `_score_sub` and `_effective_thresholds`,
+which is what actually makes the invariant structural.
+
 ## Also measured: the real Console payload
 
 **Correction (2026-08-01, after Console review).** An earlier version of this
