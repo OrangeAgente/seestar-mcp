@@ -109,6 +109,20 @@ make lint   # or: uv run ruff check src tests
 
 Never invoke a bare `python`; always go through `uv run` so the locked environment is used.
 
+`uv sync` gives you the full dev environment. For a **runtime-only** install, the
+stacking/preview dependencies are an optional extra:
+
+```bash
+uv sync --no-dev                  # telescope control + two-tier QA (50 packages)
+uv sync --no-dev --extra refine   # ...plus seestar_refine stacking + previews (60)
+```
+
+The extra (`pillow`, `astroalign`, `astroscrappy`, and the scikit-image they pull —
+about 39 MB) is only needed by `seestar_refine`. Without it the MCP server is fully
+functional and the refine tools degrade honestly: `check_backends` reports
+`pystack: false` and the stacking/preview tools return `{"ok": false, "error": ...}`
+rather than failing at import.
+
 ## Configuration
 
 All settings are overridable via environment variables with the `SEESTAR_` prefix (e.g.
