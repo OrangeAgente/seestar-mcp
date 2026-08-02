@@ -1,8 +1,12 @@
 # The auto-preview's inscribed crop can discard the target
 
-**Status:** found, not fixed. The masters are correct; only the generated preview
-PNG is affected, and `make_preview(..., params={"autocrop": False})` is a working
-workaround today.
+**Status:** FIXED 2026-08-02. Option 1 below shipped: `stack_keep_list`'s
+auto-preview now passes `autocrop=False`, and the rotated-footprint fixture with
+an off-centre source covers the seam. `stretch_master` keeps `autocrop` on — it
+takes an arbitrary FITS with no coverage information, which is the case the
+inscribed crop was written for. All three masters from the 2026-07-30/31 night
+were reprocessed through the tool path; M76 is present and the previews are full
+1080×1920 rather than 592 px wide.
 
 Found on 2026-08-01 during the first end-to-end run of `seestar_refine` on a real
 session (M76, 537 subs, 89 minutes, alt-az).

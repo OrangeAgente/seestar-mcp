@@ -336,3 +336,107 @@ def test_check_backends_is_independent_of_the_developer_home_dir(tmp_path):
         "an explicitly configured, non-existent bridge path must report False "
         "regardless of what exists under $HOME"
     )
+
+
+# --- the auto-preview must not crop the target away --------------------------
+# Found 2026-08-01 on the first real session: m76_master.png contained no M76.
+# pystack._coverage_crop deliberately takes the BOUNDING BOX so an off-centre or
+# diagonal object survives; preview.autocrop then applied a largest-INSCRIBED-
+# rectangle crop and undid exactly that. Field rotation makes it bite -- the
+# inscribed rectangle inside a rotated footprint kept 50% of the canvas and M76
+# sat 188 px outside it. See docs/superpowers/specs/
+# 2026-08-01-preview-autocrop-discards-off-centre-targets.md
+
+
+def _rotated_master(path, *, h=240, w=160):
+    """A master with a rotated valid footprint and a bright off-centre source.
+
+    Mimics a long alt-az session: the covered region is a rotated rectangle, so
+    the largest inscribed axis-aligned rectangle is much narrower than the
+    bounding box, and the source sits in the part only the bounding box keeps.
+    """
+    import numpy as np
+    from astropy.io import fits
+
+    yy, xx = np.mgrid[0:h, 0:w]
+    cy, cx = h / 2.0, w / 2.0
+    t = np.deg2rad(20.0)
+    # Rotated rectangle covering most of the frame.
+    u = (xx - cx) * np.cos(t) + (yy - cy) * np.sin(t)
+    v = -(xx - cx) * np.sin(t) + (yy - cy) * np.cos(t)
+    covered = (np.abs(u) < w * 0.44) & (np.abs(v) < h * 0.44)
+
+    data = np.where(covered, 100.0, 0.0).astype("float32")
+    # Bright compact source near the left edge, inside the footprint but outside
+    # the largest inscribed rectangle.
+    sy, sx = int(h * 0.62), int(w * 0.12)
+    data[sy - 3 : sy + 4, sx - 3 : sx + 4] = 9000.0
+    assert covered[sy, sx], "fixture bug: source must be inside the footprint"
+
+    cube = np.stack([data, data, data])  # (3, H, W), as pystack writes
+    fits.writeto(path, cube, overwrite=True)
+    return (sy, sx)
+
+
+def test_autocrop_alone_would_discard_the_offcentre_source(tmp_path):
+    """Characterisation: this is the behaviour that lost M76."""
+    import numpy as np
+    from astropy.io import fits
+
+    from seestar_refine import crop as _crop
+
+    master = tmp_path / "rot_master.fit"
+    sy, sx = _rotated_master(master)
+    rgb = np.moveaxis(fits.getdata(master).astype("float32"), 0, -1)
+
+    _, (r0, r1, c0, c1) = _crop.autocrop(rgb)
+    assert not (r0 <= sy < r1 and c0 <= sx < c1), (
+        "fixture no longer reproduces the bug: the source is inside the "
+        "inscribed rectangle, so this test would pass vacuously"
+    )
+
+
+def test_stack_autopreview_keeps_an_offcentre_target(tmp_path, monkeypatch):
+    """The stack's auto-preview must keep what _coverage_crop deliberately kept."""
+    import numpy as np
+    from PIL import Image
+
+    from seestar_refine import pystack
+    from seestar_refine.dss import StackResult
+
+    target = "M76"
+    sub_dir = tmp_path / target
+    sub_dir.mkdir()
+    (sub_dir / "a.fit").write_bytes(b"x")
+
+    master = tmp_path / "m76_master.fit"
+    sy, sx = _rotated_master(master)
+
+    def fake_stack(keep_list, settings, **kw):
+        return StackResult(
+            ok=True, engine="pystack", target=target, n_subs=1,
+            master_path=str(master), preview_path=None, stats={}, log="",
+        )
+
+    monkeypatch.setattr(pystack, "stack", fake_stack)
+
+    settings = RefineSettings(
+        _env_file=None, data_dir=tmp_path, output_dir=tmp_path
+    )
+    controller = RefineController.from_settings(settings)
+    result = asyncio.run(controller.stack_keep_list(target, engine="pystack"))
+
+    assert result["ok"] is True
+    assert result["preview_path"], "auto-preview did not run"
+
+    from pathlib import Path as _P
+
+    png = np.asarray(Image.open(_P(result["preview_path"])).convert("L"))
+    full_h, full_w = 240, 160
+    assert png.shape == (full_h, full_w), (
+        f"preview was cropped to {png.shape}; the stacker's bounding-box crop "
+        "must not be overridden by an inscribed-rectangle crop"
+    )
+    # The source must still be visible where it was.
+    patch = png[sy - 3 : sy + 4, sx - 3 : sx + 4]
+    assert patch.max() > png.mean(), "the off-centre target is missing from the preview"
