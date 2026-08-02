@@ -552,3 +552,140 @@ def test_ecc_sigma_is_reported():
     )
     assert report.medians["eccentricity_sigma"] is not None
     assert report.medians["eccentricity_sigma"] > 0
+
+
+# --- hardening from the 2026-08-02 adversarial review ------------------------
+# Two medium findings against the session-relative marginal line: a configured
+# qa_eccentricity_marginal was silently demoted from an exact cutoff to a mere
+# floor with no escape hatch, and the derived line could invert past the REJECT
+# cutoff or go NaN, silently making MARGINAL unreachable.
+
+
+def test_configured_absolute_marginal_is_honoured_exactly():
+    """An explicitly configured marginal cutoff must be the cutoff, not a floor.
+
+    Before the session-relative change, qa_eccentricity_marginal WAS the exact
+    line. Users who raised it had their policy silently widened. The named
+    override restores an exact cutoff, mirroring qa_fwhm_absolute /
+    qa_scatter_absolute / qa_eccentricity_absolute.
+    """
+    settings = _settings(qa_eccentricity_marginal_absolute=0.50)
+    values = [0.45, 0.47, 0.49, 0.51, 0.53, 0.55]
+    report = classify(
+        [_clean(f"s{i}", eccentricity=e) for i, e in enumerate(values)], settings
+    )
+    assert report.thresholds["eccentricity_marginal"] == 0.50
+    marg = {v.name for v in report.subs if v.verdict == "MARGINAL"}
+    # Exactly the subs at/above 0.50 and below the 0.575 reject line.
+    assert marg == {"s3", "s4", "s5"}
+
+
+def test_marginal_never_exceeds_the_reject_line():
+    """A poor session must not push MARGINAL above REJECT and erase the tier."""
+    settings = _settings()
+    # Session median sits just under the 0.575 reject cutoff.
+    values = [0.50, 0.55, 0.57, 0.574, 0.58, 0.70]
+    report = classify(
+        [_clean(f"s{i}", eccentricity=e) for i, e in enumerate(values)], settings
+    )
+    thr = report.thresholds
+    assert thr["eccentricity_marginal"] <= thr["eccentricity_reject"], (
+        f"marginal {thr['eccentricity_marginal']} inverted past reject "
+        f"{thr['eccentricity_reject']}: MARGINAL is unreachable"
+    )
+    # 0.574 is perceptibly elongated and below reject - it must not read PASS.
+    v = {s.name: s.verdict for s in report.subs}
+    assert v["s3"] != "PASS", "a 0.574 sub graded PASS on a session this poor"
+
+
+def test_marginal_clamps_under_a_configured_absolute_reject():
+    """The clamp must track qa_eccentricity_absolute, not the 0.575 default."""
+    settings = _settings(qa_eccentricity_absolute=0.50)
+    values = [0.40, 0.44, 0.46, 0.48, 0.49]
+    report = classify(
+        [_clean(f"s{i}", eccentricity=e) for i, e in enumerate(values)], settings
+    )
+    thr = report.thresholds
+    assert thr["eccentricity_reject"] == 0.50
+    assert thr["eccentricity_marginal"] <= 0.50
+
+
+def test_non_finite_threshold_config_cannot_disable_the_tier():
+    """NaN sigma must not silently make every eccentricity comparison False."""
+    import math
+
+    settings = _settings(qa_eccentricity_marginal_sigma=float("nan"))
+    values = [0.45, 0.50, 0.55]
+    report = classify(
+        [_clean(f"s{i}", eccentricity=e) for i, e in enumerate(values)], settings
+    )
+    thr = report.thresholds["eccentricity_marginal"]
+    assert thr is not None and math.isfinite(thr), (
+        f"non-finite marginal cutoff {thr}: every '>=' is False, so eccentricity "
+        "MARGINAL silently never fires and render_json would raise"
+    )
+
+
+def test_non_finite_floor_config_cannot_disable_the_tier():
+    import math
+
+    settings = _settings(qa_eccentricity_marginal=float("inf"))
+    report = classify(
+        [_clean(f"s{i}", eccentricity=e) for i, e in enumerate([0.45, 0.50, 0.55])],
+        settings,
+    )
+    thr = report.thresholds["eccentricity_marginal"]
+    assert thr is not None and math.isfinite(thr)
+
+
+def test_report_still_renders_as_strict_json_under_bad_threshold_config():
+    """render_json is strict RFC-8259; a NaN cutoff would make it raise."""
+    import json
+
+    settings = _settings(qa_eccentricity_marginal_sigma=float("nan"))
+    report = classify(
+        [_clean(f"s{i}", eccentricity=e) for i, e in enumerate([0.45, 0.50, 0.55])],
+        settings,
+    )
+    json.loads(render_json(report))  # must not raise
+
+
+def test_ecc_marginal_boundary_is_inclusive_at_the_floor():
+    """Exactly 0.42 is MARGINAL (>=), matching the pre-change rule."""
+    settings = _settings()
+    report = classify(
+        [_clean(f"s{i}", eccentricity=e) for i, e in enumerate([0.10, 0.11, 0.42])],
+        settings,
+    )
+    v = {s.name: s.verdict for s in report.subs}
+    assert report.thresholds["eccentricity_marginal"] == 0.42
+    assert v["s2"] == "MARGINAL"
+
+
+def test_score_sub_and_thresholds_cannot_report_different_cutoffs():
+    """classify must compute the cutoff once and hand the SAME value to both.
+
+    Sharing a helper removed drift inside the calculation, not at the call
+    sites: two callers passing different medians would still disagree.
+    """
+    import inspect
+
+    src = inspect.getsource(classify)
+    assert "_ecc_marginal_threshold(" in src, (
+        "classify should compute the eccentricity marginal cutoff itself"
+    )
+    assert src.count("_ecc_marginal_threshold(") == 1, (
+        "classify must compute the cutoff exactly once and pass the value on"
+    )
+    settings = _settings()
+    report = classify(
+        [_clean(f"s{i}", eccentricity=e) for i, e in enumerate([0.45, 0.49, 0.53])],
+        settings,
+    )
+    thr = report.thresholds["eccentricity_marginal"]
+    for v in report.subs:
+        for r in v.reasons:
+            if r.startswith("MARGINAL: eccentricity"):
+                assert f"{thr:.2f}" in r, (
+                    f"reason {r!r} cites a cutoff other than the reported {thr}"
+                )
