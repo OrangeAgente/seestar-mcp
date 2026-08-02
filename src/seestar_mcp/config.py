@@ -88,6 +88,13 @@ class Settings(BaseSettings):
     # 2026-08-01-eccentricity-marginal-saturation.md
     qa_eccentricity_marginal: float = 0.42
     qa_eccentricity_marginal_sigma: float = 1.0  # matches qa_fwhm_marginal_sigma
+    # Exact MARGINAL cutoff, bypassing the session-relative calculation entirely
+    # — the escape hatch for anyone who wants a fixed line, mirroring
+    # qa_fwhm_absolute / qa_scatter_absolute / qa_eccentricity_absolute. Added
+    # 2026-08-02: before the session-relative change, qa_eccentricity_marginal
+    # WAS the exact cutoff, so users who had raised it found their explicit
+    # policy silently widened into a mere lower bound with no way back.
+    qa_eccentricity_marginal_absolute: float | None = None
     qa_snr_floor_factor: float = 0.5  # REJECT if SNR < median*this
     qa_starcount_floor_factor: float = 0.5
     qa_fwhm_absolute: float | None = None  # absolute override; None = session-relative

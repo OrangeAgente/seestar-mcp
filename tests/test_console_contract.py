@@ -686,7 +686,7 @@ def test_contract_version_is_declared_and_matches_this_suite():
     title = re.search(r"^# seestar-mcp consumer contract — v(\S+)", contract, re.M)
     assert title, "contract has no versioned title"
     version = title.group(1)
-    assert version == "1.1.0"
+    assert version == "1.1.1"
 
     # The Status table is the field a consumer actually pins against, so it must
     # agree with the title. They drifted apart once (title said 1.0.1, the table
@@ -757,3 +757,33 @@ def test_get_target_observability_tool_contract(tmp_path, monkeypatch):
         )
         obs = out["observability"]
         assert obs["dark_minutes_in_sweet_band"] <= obs["dark_minutes_above_floor"]
+
+
+def test_eccentricity_cutoff_lines_never_cross(tmp_path):
+    """v1.1.1: the two eccentricity lines a chart draws must stay ordered.
+
+    The marginal line became session-derived in v1.1.0 and could exceed the
+    absolute reject line on a poor session, which renders as a "marginal"
+    cutoff drawn ABOVE the "reject" cutoff — a plausible-looking but incoherent
+    chart. Both must also be finite: a NaN cutoff silently disabled the tier and
+    would have made the strict-JSON renderer raise.
+    """
+    import math
+
+    c = _controller(tmp_path)
+    out = asyncio.run(
+        c.qa_tier2(paths=[
+            str(FIXTURE_DIR / "good.fits"),
+            str(FIXTURE_DIR / "bad_ecc.fits"),
+            str(FIXTURE_DIR / "hazy.fits"),
+        ])
+    )
+    thresholds = out["summary"]["thresholds"]
+    marginal = thresholds["eccentricity_marginal"]
+    reject = thresholds["eccentricity_reject"]
+
+    assert math.isfinite(marginal) and math.isfinite(reject)
+    assert marginal <= reject, (
+        f"marginal {marginal} is above reject {reject}: the tier is unreachable "
+        "and a chart would draw its cutoff lines crossed"
+    )

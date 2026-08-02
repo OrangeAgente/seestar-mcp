@@ -1,4 +1,4 @@
-# seestar-mcp consumer contract — v1.1.0
+# seestar-mcp consumer contract — v1.1.1
 
 The response shapes external consumers may rely on, and the rules for changing
 them. Enforced by `tests/test_console_contract.py`, which fails **this** repo's
@@ -11,7 +11,7 @@ it end to end.
 
 | | |
 |---|---|
-| **Version** | 1.1.0 |
+| **Version** | 1.1.1 |
 | **Covers** | 10 of 34 tools — the ones a consumer actually parses |
 | **Validated against a real consumer** | yes — the SeeStar Console parsed a real 25-sub `qa_tier2` payload with an independently written schema, first try, no changes |
 | **Enforced by** | `tests/test_console_contract.py` (19 tests, all 10 pinned at the tool boundary) |
@@ -57,7 +57,10 @@ it end to end.
   a fixed 0.42; it is now `max(median + 1.0σ, 0.42)`. No shape change and no
   schema break — but a chart that *hardcoded* 0.42 rather than reading the field
   now draws its line in the wrong place. `eccentricity_reject` is unchanged and
-  stays absolute at 0.575.
+  stays absolute at 0.575. As of v1.1.1 it is guaranteed **finite** and **never
+  above `eccentricity_reject`**, so the two lines never cross. If they are equal,
+  the MARGINAL band is empty by construction — that is a degenerate
+  configuration, not a rendering bug.
 - **`qa_tier2.summary.target` echoes the `target` argument**, so it is `null`
   whenever a caller uses `paths=`. Do not build a header on it.
 - **`list_projects` / `recommend_projects` default to `detail="summary"`**, which
@@ -73,6 +76,18 @@ it end to end.
 
 ## Changelog
 
+- **v1.1.1** — `thresholds.eccentricity_marginal` is now guaranteed **finite** and
+  **never above `thresholds.eccentricity_reject`**. No shape change; both were
+  already true for every real session, and re-scoring the 970-sub reference night
+  produced byte-identical verdicts, keep-lists and thresholds. Pinned because a
+  consumer drawing two cutoff lines may now rely on their ordering.
+  *Why:* adversarial review found the derived line could exceed the reject
+  cutoff on a session whose median sits near 0.575 — making MARGINAL unreachable
+  exactly on the poor night where it matters — and that a non-finite
+  `qa_eccentricity_marginal_sigma` produced a `NaN` cutoff, which silently
+  disabled the rule (`x >= nan` is always False) and would have made
+  `render_json` raise. New setting `qa_eccentricity_marginal_absolute` restores
+  an exact cutoff for anyone who wants one.
 - **v1.1.0** — `thresholds.eccentricity_marginal` became session-derived
   (`max(median + 1.0σ, 0.42)`), and `qa_tier2.summary.medians` gained
   `eccentricity_sigma`. MINOR, not MAJOR: the key, its unit (eccentricity

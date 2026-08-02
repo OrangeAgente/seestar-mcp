@@ -54,6 +54,12 @@ pixel scale, target altitude, and sky vary. Compute the per-session median first
   the mount. Measured over 970 real subs, a fixed 0.42 line graded 96.5% of a *good* night
   MARGINAL — median FWHM 2.41, zero dropped frames. The line is session-relative now, so
   ~12–15% is the normal rate; a sustained jump above that is the signal worth chasing.
+  Two guards worth knowing when reading a report: the marginal line is capped so it can
+  never sit above the reject line, and if the session's own median + 1σ would reach the
+  reject cutoff it **falls back to the 0.42 floor** — so on a genuinely poor session you
+  will see a low marginal line and a large MARGINAL count. That is the intended signal
+  ("this whole session is elongated"), not a threshold glitch. Set
+  `qa_eccentricity_marginal_absolute` if you want a fixed cutoff instead.
 - **SNR**: REJECT if SNR falls below a session floor (default: median SNR × 0.5) — usually
   indicates clouds/transparency, not a fixable per-sub flaw.
 - **Star count**: REJECT if star count < 50% of the session median — strong cloud signal.
