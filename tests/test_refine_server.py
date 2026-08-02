@@ -440,3 +440,50 @@ def test_stack_autopreview_keeps_an_offcentre_target(tmp_path, monkeypatch):
     # The source must still be visible where it was.
     patch = png[sy - 3 : sy + 4, sx - 3 : sx + 4]
     assert patch.max() > png.mean(), "the off-centre target is missing from the preview"
+
+
+def test_dss_autopreview_still_autocrops(tmp_path, monkeypatch):
+    """REGRESSION: the pystack fix must not disable autocrop for DSS.
+
+    DSS does not crop its master, so autocrop is the only thing trimming the
+    field-rotation border. The first version of the M76 fix disabled autocrop in
+    the shared post-stack block and silently applied a pystack-only rationale to
+    the DSS path, which would have left black wedges around every DSS preview.
+    """
+    import numpy as np
+    from PIL import Image
+
+    from seestar_refine import dss
+    from seestar_refine.dss import StackResult
+
+    target = "M27"
+    sub_dir = tmp_path / target
+    sub_dir.mkdir()
+    (sub_dir / "a.fit").write_bytes(b"x")
+
+    master = tmp_path / "M27_master.fit"
+    _rotated_master(master)
+
+    def fake_stack(keep_list, settings, *, runner=None):
+        return StackResult(
+            ok=True, engine="dss", target=target, n_subs=1,
+            master_path=str(master), preview_path=None, stats={}, log="",
+        )
+
+    monkeypatch.setattr(dss, "stack", fake_stack)
+
+    settings = RefineSettings(
+        _env_file=None, data_dir=tmp_path, output_dir=tmp_path, dss_cli="x"
+    )
+    controller = RefineController.from_settings(settings)
+    result = asyncio.run(controller.stack_keep_list(target, engine="dss"))
+
+    assert result["ok"] is True
+    assert result["preview_path"]
+    from pathlib import Path as _P
+
+    png = np.asarray(Image.open(_P(result["preview_path"])).convert("L"))
+    assert png.shape != (240, 160), (
+        "DSS preview was not autocropped; its uncropped master still carries "
+        "the field-rotation border"
+    )
