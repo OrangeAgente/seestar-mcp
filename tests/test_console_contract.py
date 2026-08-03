@@ -787,3 +787,35 @@ def test_eccentricity_cutoff_lines_never_cross(tmp_path):
         f"marginal {marginal} is above reject {reject}: the tier is unreachable "
         "and a chart would draw its cutoff lines crossed"
     )
+
+
+def test_contract_coverage_count_matches_the_tools_it_names():
+    """The Status row's tool count must equal the Covered-tools list.
+
+    This drifted twice: v1.0.1 fixed "9 while the list named 10", and it went
+    stale again at 10-vs-11 because `list_projects` / `recommend_projects` share
+    one line but are two tools. Counting the list here instead of trusting the
+    prose means the next edit cannot reintroduce it.
+    """
+    contract = (Path(__file__).parents[1] / "docs" / "CONTRACT.md").read_text(
+        encoding="utf-8"
+    )
+    covers = re.search(r"\*\*Covers\*\*\s*\|\s*(\d+) of (\d+) tools", contract)
+    assert covers, "Status table has no 'Covers N of M tools' row"
+    claimed, total = int(covers.group(1)), int(covers.group(2))
+
+    section = re.search(
+        r"## Covered tools\s*\n+(.*?)\n\nThat is", contract, re.S
+    )
+    assert section, "Covered tools section not found"
+    listed = set(re.findall(r"`([a-z_0-9]+)`", section.group(1)))
+    assert claimed == len(listed), (
+        f"Status row claims {claimed} tools; the list names {len(listed)}: "
+        f"{sorted(listed)}"
+    )
+
+    # And the denominator must be the real registry size.
+    from seestar_mcp.server import mcp
+
+    real = len(asyncio.run(mcp.list_tools()))
+    assert total == real, f"contract says {total} total tools; server has {real}"
