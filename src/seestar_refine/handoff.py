@@ -17,14 +17,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import re
 from pathlib import Path
 
+from .models import slug
 
-def _slug(text: str) -> str:
-    """Filesystem-safe slug for a target name (letters/digits/dashes)."""
-    slug = re.sub(r"[^A-Za-z0-9]+", "-", (text or "").strip()).strip("-").lower()
-    return slug or "session"
 
 
 def write_pixinsight_config(
@@ -72,7 +68,7 @@ def write_pixinsight_config(
             "output_format": "xisf",
         }
 
-        config_path = out_dir / f"{_slug(target)}_pixinsight.json"
+        config_path = out_dir / f"{slug(target)}_pixinsight.json"
         config_path.write_text(
             json.dumps(config, indent=2), encoding="utf-8"
         )

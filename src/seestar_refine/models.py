@@ -1,4 +1,4 @@
-"""Shared data models for the seestar-refine service.
+"""Shared data models and helpers for the seestar-refine service.
 
 ``StackResult`` is the common return shape for every stacking backend (DSS in
 :mod:`seestar_refine.dss`; PixInsight WBPP in :mod:`seestar_refine.wbpp`,
@@ -8,7 +8,19 @@ dependency and the server can serialize a uniform envelope.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+
+
+def slug(text: str) -> str:
+    """Filesystem-safe slug for a target name (letters/digits/dashes).
+
+    Lives here because ``dss``, ``handoff`` and ``server`` each carried their own
+    byte-identical copy, and they had already begun to drift (one had a stray
+    function-local ``import re``). ``None``/empty input yields ``"session"``.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "-", (text or "").strip()).strip("-").lower()
+    return cleaned or "session"
 
 
 @dataclass
