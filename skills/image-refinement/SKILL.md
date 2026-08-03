@@ -25,8 +25,18 @@ availability and the user's wishes:
   keep-list into a master and an auto-stretched PNG preview. Complete for DSS users.
 - **pystack** — the pure-Python backend (`astroalign` + numpy). **No external app,
   cross-platform**, and visually equivalent to DSS on Seestar data. Use `engine="pystack"`
-  when DSS isn't installed or on non-Windows hosts. Available whenever `astroalign`
-  imports (see `check_backends`).
+  when DSS isn't installed or on non-Windows hosts.
+
+  **It is not installed by default.** `astroalign` lives in the optional `refine` extra, so
+  a runtime-only install has no stacking backend at all unless DSS is configured. If
+  `check_backends` reports `pystack: false`, that is what happened — tell the user to run:
+
+  ```bash
+  uv sync --extra refine        # or: uv sync --no-dev --extra refine
+  ```
+
+  Then re-run `check_backends`. Do not route to `engine="pystack"` without confirming the
+  report says it is available; the tool will return an error-tagged result, not a stack.
 - **PixInsight** — the optional full finish (only if installed): stack via WBPP, then
   hand the master to the user's **external `pixinsight-mcp`** server for its
   quality-gated creative processing → a publication-ready image.
@@ -47,6 +57,14 @@ status for the long stacking run, then the result.
    The report has `dss`, `pystack`, `pixinsight`, and `pixinsight_mcp` (the external
    bridge) plus `notes` — quote it; do not assume a backend is present. If `dss` is
    false but `pystack` is true, prefer `engine="pystack"` (no external app needed).
+
+   **If BOTH `dss` and `pystack` are false, stop — there is no stacking backend.** Do not
+   call `stack_keep_list`; it can only fail. On a fresh install this is the expected state,
+   because `astroalign` ships in the optional `refine` extra. Say so and give the fix:
+
+   > `Backends: no stacking engine — DSS not configured and pystack not installed.`
+   > `Run` `uv sync --extra refine` `to enable pystack (pure Python, no external app), or`
+   > `set SEESTAR_REFINE_DSS_CLI to your DeepSkyStackerCL path.`
 
 ## Phase 1 — Stack
 
