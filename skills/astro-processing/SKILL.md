@@ -25,6 +25,11 @@ extraction on the master → **stretch** → denoise → saturation → (opt-in)
 `pystack.stack` does debayer → flat → register → integrate → coverage-crop.
 `stretch_master`/`make_preview` does gradient → stretch → denoise → saturation → upscale.
 
+**Prerequisite:** this whole recipe needs the optional `refine` extra (`astroalign`,
+`pillow`, `astroscrappy`) — it is **not** in a default install. If `check_backends` reports
+`pystack: false`, that is why; the fix is `uv sync --extra refine`. No external application
+is required beyond that.
+
 ## Why the order matters (the physics)
 
 - **Vignetting is MULTIPLICATIVE → DIVIDE by a flat** (`flat_correct=True`, on by

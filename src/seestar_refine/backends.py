@@ -94,8 +94,9 @@ def detect_backends(
         pystack = False
     if not pystack:
         notes.append(
-            "pystack unavailable — astroalign not importable "
-            "(add the astroalign dependency)."
+            "pystack unavailable — astroalign not importable. "
+            "Run `uv sync --extra refine` to install it (pure Python, no "
+            "external app needed)."
         )
 
     return Backends(
