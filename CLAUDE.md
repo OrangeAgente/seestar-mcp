@@ -76,11 +76,24 @@ hash-locked in `uv.lock`; re-run `uv lock` if you touch `pyproject.toml`.
   commands. `seestar_alp` handles the handshake if its `interop_pem` points at a
   `seestar_client_key.pem` the user supplies (extracted from the ZWO APK under §1201(f)). This
   server talks *through* seestar_alp, so it never handles the key itself.
-- **`# FIRMWARE-DEPENDENT` (unvalidated against hardware — isolated to single helpers):** the
-  GPS key in `_parse_gps`, the battery key in `_parse_device_health` (both in `server.py`), and
-  the sub-listing method `get_img_file_list` in `data_client.py`. Validate + correct these when
-  next on real hardware. The real `get_view_state` structure IS confirmed (fw 7.75):
-  `result.View.Stack.stacked_frame` / `dropped_frame`.
+- **`# FIRMWARE-DEPENDENT` — status after the fw 8.46 verification (2026-08-03):**
+  - `_parse_gps` → `result.location_lon_lat` as `[lon, lat]` — **VALIDATED** on 8.46.
+  - `_parse_device_health` → `result.device.is_verified`, and `_parse_battery` →
+    `result.pi_status.battery_capacity` — **VALIDATED** on 8.46.
+  - `mount.close` (`True` = arm folded) — **VALIDATED**; this is the authoritative park signal.
+  - `get_img_file_list` in `data_client.py` — **ABSENT on 8.46.** That name and nine other
+    spellings all return `method not found` (code 103). There is probably no native listing
+    RPC; harmless because `list_subs` prefers the SMB/filesystem path when `image_root` is set.
+  - `get_view_state` — confirmed on fw 7.75 and still valid on 8.46:
+    `result.View.Stack.stacked_frame` / `dropped_frame`, and `result: {}` on an idle scope.
+- **Filter wheel indices (fw 8.46, hardware-verified):** `0 = dark`, `1 = IRCUT`, `2 = LP`. The
+  device reports its own mapping via `get_wheel_setting`; read the current index with
+  `get_wheel_position` and busy/idle with `get_wheel_state`. Prefer reading the mapping over
+  trusting the constants if a firmware reorders the wheel.
+- **Alpaca disagrees with the device on two fields — trust the native `get_device_state`.**
+  Alpaca `/atpark` and `/tracking` reported `false`/`true` while the device reported
+  `mount.close: true` (folded) and `mount.tracking: false`. Reproduced on both 7.75 and 8.46.
+  Anything deciding whether the scope is parked or tracking must read the native state.
 - **Line endings:** commit with `git -c core.autocrlf=false commit`. Commit diff stats can look
   inflated (CRLF↔LF renormalization) — the content diff is what matters; tests are the gate.
 - **Field rotation (alt-az):** rank on *sweet-band* time `[min_alt, ~60° ceiling]`, NOT raw
