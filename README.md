@@ -241,6 +241,7 @@ their descriptions; Skills gate them behind explicit user confirmation.
 | `connect_telescope` | Connect to the Seestar via seestar_alp. No motion; safe anytime. |
 | `get_status` | Read connection, RA/Dec pointing, and tracking/slewing state. Read-only. |
 | `get_view_state` | Read the device's live view/stacking telemetry. Read-only. |
+| `get_run_state` | Read the persisted session record: `state` is tri-valued (`active` / `idle` / `unknown`, where `unknown` means a run was recorded but its stamp went stale). Survives an MCP restart, so a new session can tell whether a run is still in flight. Read-only. |
 | `goto_target` | Slew to a target and open a new session (commands MOTION). |
 | `start_stack` | Start live-stacking (begins capturing/integrating exposures). |
 | `stop_view` | Stop the current view/stack (`Stack` or `ContinuousExposure`). |
@@ -308,7 +309,8 @@ weather + moon + twilight, and `plan_targets` returns a ranked shortlist optimiz
 *clean* alt-az data (field-rotation sweet-band time, light-pollution fit, moon
 separation, FOV framing), and every score is reason-tagged. With no profile, the tools
 fall back to the scope's GPS and a default Bortle. Weather is the only external call
-(`api.open-meteo.com`, keyless) and a failure is non-fatal. The **`observing-planner`**
+(`api.open-meteo.com`, keyless by default — or `my.meteoblue.com` when
+`SEESTAR_METEOBLUE_API_KEY` is set) and a failure is non-fatal. The **`observing-planner`**
 skill drives this flow and hands the chosen target to `run-session`.
 
 The planner now also has **projects/history** (it boosts targets that still need data,
