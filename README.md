@@ -68,10 +68,20 @@ session end-to-end (goto → autofocus → plate-solve → stack → park) and a
 stack through DeepSkyStacker), but several code paths are **not yet hardware-validated** and
 are flagged `# FIRMWARE-DEPENDENT` in the source (single, well-marked update points):
 
-- the GPS key in `_parse_gps` and the battery key in `_parse_device_health`;
-- the on-device sub-listing method (`get_img_file_list`) used by `list_subs`;
+- the on-device sub-listing method (`get_img_file_list`) used by `list_subs` — probed and
+  ABSENT on firmware 8.46, along with nine other plausible spellings; `list_subs` uses the
+  SMB/filesystem path instead whenever an image root is configured;
 - the PixInsight/WBPP refinement path on Windows (the external `pixinsight-mcp` is
-  macOS-tested; the DSS path is the validated default).
+  macOS-tested; the DSS path is the validated default);
+- motion, autofocus, plate-solve and imaging on **firmware 8.46** — the read paths and the
+  filter wheel were re-verified there, but goto/stack were not (daylight at the time).
+
+**Verified on firmware 8.46 (2026-08-03):** the RSA interop handshake
+(`is_verified: true`), GPS (`result.location_lon_lat`), battery
+(`result.pi_status.battery_capacity`), park state (`mount.close`), the SMB data path, and the
+filter wheel (`0 = dark, 1 = IRCUT, 2 = LP`, moved and restored under test). Note that Alpaca's
+`/atpark` and `/tracking` **disagree with the device** on both 7.75 and 8.46 — read the native
+`get_device_state` for those.
 
 Firmware changes are the expected breakage vector; these constants are isolated so a bump is
 a one-line swap. Treat unvalidated paths as needing a first-light check against your own
