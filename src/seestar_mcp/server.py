@@ -491,12 +491,23 @@ class SeestarController:
         try:
             snap = await self.tier1.poll()
             snap_dict = dataclasses.asdict(snap)
-            snap_dict.pop("raw", None)  # keep output compact; raw stays in provenance
+            # Keep output compact; raw stays in provenance. `snapshot.degraded`
+            # survives that strip deliberately: raw carries view_error /
+            # device_error, so popping it used to discard the only evidence that
+            # a read had failed, leaving an all-null snapshot with empty flags
+            # that reads as "polled fine, nothing wrong".
+            snap_dict.pop("raw", None)
+            degraded = bool(snap_dict.get("degraded"))
             return {
                 "ok": True,
+                "degraded": degraded,
                 "snapshot": snap_dict,
                 "flags": self.tier1.check(),
-                "status_line": self.tier1.status_line(),
+                "status_line": (
+                    "telemetry unavailable — scope unreachable or not responding"
+                    if degraded
+                    else self.tier1.status_line()
+                ),
                 "trends": self.tier1.trends(),
             }
         except AlpacaError as exc:

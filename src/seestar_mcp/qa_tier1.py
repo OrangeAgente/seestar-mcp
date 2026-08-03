@@ -25,7 +25,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from .alpaca_client import AlpacaError
 
 if TYPE_CHECKING:
     from .config import Settings
@@ -45,6 +44,13 @@ class Tier1Snapshot:
     hfd: float | None = None  # half-flux-diameter focus-quality (if exposed)
     tracking: bool | None = None
     raw: dict = field(default_factory=dict)  # merged raw telemetry, for audit
+    #: True when a telemetry read failed, so every metric above is "unknown"
+    #: rather than "measured and fine". The detail lives in
+    #: ``raw["view_error"]`` / ``raw["device_error"]``, but the tool boundary
+    #: strips ``raw`` to keep output small — without this flag a total read
+    #: failure is indistinguishable from a healthy idle scope (all-null
+    #: snapshot, empty flags). Contract rule 4: unknown is not empty.
+    degraded: bool = False
 
 
 # --- tolerant coercion / lookup helpers -----------------------------------
@@ -310,8 +316,14 @@ class Tier1Monitor:
         """
         try:
             result = await self._alpaca.method_sync(method)
-        except AlpacaError as exc:
-            return {}, str(exc)
+        except Exception as exc:  # noqa: BLE001 - the whole point of _safe_call
+            # Deliberately broader than AlpacaError. This used to catch only
+            # AlpacaError, so anything else (a bare httpx/OS error, a timeout, a
+            # decode failure) escaped poll(), escaped the controller's
+            # `except AlpacaError`, and reached the MCP boundary as a raw
+            # exception - breaking the never-raise-on-tool-paths convention that
+            # this method's own name and docstring promise.
+            return {}, f"{type(exc).__name__}: {exc}"
         return (result if isinstance(result, dict) else {}), None
 
     async def poll(self) -> Tier1Snapshot:
@@ -337,6 +349,7 @@ class Tier1Monitor:
             focus_pos=dev_fields.get("focus_pos"),
             hfd=view_fields.get("hfd"),
             tracking=dev_fields.get("tracking"),
+            degraded=(view_err is not None or dev_err is not None),
             raw=raw,
         )
 
