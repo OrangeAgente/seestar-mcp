@@ -1,5 +1,11 @@
 # seestar-mcp
 
+![NGC 7635, the Bubble Nebula — 136 subs kept from 149, stacked by this pipeline](docs/images/hero.jpg)
+
+<sub>NGC 7635 (Bubble Nebula) — 22.7 min of 10 s subs from a Seestar S50 under an 89%
+moon. Graded, keep-listed and stacked by this repo, unretouched apart from a display
+stretch. Every image on this page is real pipeline output.</sub>
+
 An auditable [Model Context Protocol](https://modelcontextprotocol.io) server plus a set of
 Claude Code Skills that let you control a **ZWO Seestar S50** smart telescope and run
 data-quality assurance on its astrophotography output. The server wraps
@@ -10,6 +16,50 @@ append-only provenance log, dependencies are hash-pinned, and the daemon runs sa
 least-privilege. It is designed to run 24/7 on an **NVIDIA Jetson** host and is driven from
 the **Claude phone app via Claude Code Remote Control**. The Jetson is the brain; the phone
 is just a window into the local session.
+
+## What a night looks like
+
+One unattended session on 2026-07-30/31: three targets, 970 subs, 2 h 42 m. Every sub
+was scored, 856 were kept, and each target was stacked into a master — no manual
+culling anywhere in that chain.
+
+![NGC 7380, NGC 7635 and M76 — three targets from a single unattended night](docs/images/night-triptych.jpg)
+
+<sub>Left to right: NGC 7380 (Wizard), NGC 7635 (Bubble), M76 (Little Dumbbell).
+183, 136 and 537 kept subs.</sub>
+
+The interesting part is not the stacking — it is deciding **which subs deserve to be
+stacked**, and being able to say why afterwards. Thresholds are derived from the
+session itself, because a constant cannot know what your rig's normal looks like:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/qa-eccentricity-dark.png">
+  <img alt="Per-sub eccentricity across a 615-sub session, with the session-derived MARGINAL cutoff and the absolute REJECT cutoff drawn as reference lines" src="docs/images/qa-eccentricity.png">
+</picture>
+
+That chart is also a bug report. An alt-az mount has field rotation, so a Seestar's
+stars baseline around 0.49 eccentricity — which means the fixed 0.42 cutoff this
+project shipped with sat *below 96.5% of a good night* and graded 831 of 970 subs
+MARGINAL. The cutoff is now `max(median + 1σ, 0.42)`: session-relative, with the old
+constant kept only as a perceptibility floor. Rejects and keep-lists were unchanged by
+the fix — it moved the signal, not the stacking decisions.
+
+Every verdict carries its reason, so nothing is unexplained:
+
+```json
+{
+  "name": "Light_NGC7635_10.0s_LP_20260731-003050",
+  "verdict": "REJECT",
+  "reasons": ["REJECT: eccentricity 0.58 >= 0.575 cutoff"],
+  "metrics": {
+    "star_count": 70, "fwhm": 2.501, "hfr": 1.4626,
+    "eccentricity": 0.578, "snr": 44.0453
+  }
+}
+```
+
+<sub>A real record from that night's `qa_report_NGC7635.json`, trimmed to the fields
+shown.</sub>
 
 ## Status & limitations
 
@@ -26,7 +76,9 @@ are flagged `# FIRMWARE-DEPENDENT` in the source (single, well-marked update poi
 Firmware changes are the expected breakage vector; these constants are isolated so a bump is
 a one-line swap. Treat unvalidated paths as needing a first-light check against your own
 scope. The field-rotation **autocrop** is a brightness heuristic and cannot pixel-perfectly
-excise the sheared border on a smooth sky (a coverage-map crop is a future enhancement).
+excise the sheared border on a smooth sky. The pure-Python `pystack` backend does not
+rely on that heuristic — it keeps a real per-pixel coverage map and crops from that
+instead.
 
 ## Prerequisites
 
@@ -166,9 +218,9 @@ QA thresholds (all `SEESTAR_QA_*`, see `config.py`) include the scattered-light 
 > (no such change), keep the scope on an isolated VLAN if you do enable it, and revert when
 > done. Full detail in [`SECURITY.md`](SECURITY.md#data-access-the-smb--filesystem-backend-host-wide-caveat).
 
-## Tools (33)
+## Tools (34)
 
-The server exposes exactly 33 single-purpose, least-privilege tools with honest,
+The server exposes exactly 34 single-purpose, least-privilege tools with honest,
 non-obfuscated descriptions. Destructive/motion tools are clearly labelled `SIDE EFFECT` in
 their descriptions; Skills gate them behind explicit user confirmation.
 
