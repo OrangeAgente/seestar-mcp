@@ -188,6 +188,20 @@ only at the end.** The cheapest source is the live plate-solve annotation: `get_
 1080×1920 frame. Alternatively pull the newest sub JPG the scope writes to its share
 (on the tested firmware, `_LP_` in the filename confirms the dual-band filter engaged and
 `_IRCUT_` means broadband — check your own filenames if the convention differs).
+
+**Filter indices — never guess one.** `set_filter(position)` takes a bare integer, and
+**index 0 is `dark`, which closes the shutter**: pick it by mistake and the whole target
+images black with no error. Hardware-verified on firmware 8.46:
+
+| index | name | use |
+|---|---|---|
+| 0 | `dark` | shutter closed — dark frames only |
+| 1 | `IRCUT` | broadband |
+| 2 | `LP` | light-pollution / dual-band |
+
+The scope publishes its own mapping via the native `get_wheel_setting`
+(`{"names": ["dark", "IRCUT", "LP"]}`); read that rather than trusting this table if a
+firmware reorders the wheel, and read back `get_wheel_position` after any change.
 Confirm three things: the object is **in frame**, stars are **tight** (focus good), and the
 background is **clean** (no cloud haze).
 
