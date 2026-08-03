@@ -12,9 +12,9 @@ it end to end.
 | | |
 |---|---|
 | **Version** | 1.1.1 |
-| **Covers** | 10 of 34 tools — the ones a consumer actually parses |
+| **Covers** | 11 of 34 tools — the ones a consumer actually parses |
 | **Validated against a real consumer** | yes — the SeeStar Console parsed a real 25-sub `qa_tier2` payload with an independently written schema, first try, no changes |
-| **Enforced by** | `tests/test_console_contract.py` (19 tests, all 10 pinned at the tool boundary) |
+| **Enforced by** | `tests/test_console_contract.py` (20 tests, all 11 pinned at the tool boundary) |
 
 ## The rules
 
@@ -37,6 +37,11 @@ it end to end.
 `get_view_state` · `get_status` · `get_run_state` · `qa_tier1` · `qa_tier2` ·
 `list_projects` / `recommend_projects` · `assess_conditions` · `plan_targets` ·
 `get_target_observability` · `get_site_profile`
+
+That is **11 tools on 10 lines** — `list_projects` and `recommend_projects` share a
+line but are two separate tools, which is what made the count drift twice. The
+suite also calls `set_site_profile` and `log_session_result`, but only as fixtures
+to create state; their shapes are not pinned.
 
 ## Shapes that are load-bearing and easy to break by accident
 
