@@ -412,3 +412,40 @@ def test_readonly_tools_log_under_their_own_names(tmp_path):
 
     tools = [_json.loads(line)["tool"] for line in p.read_text().splitlines()]
     assert {"get_status", "get_view_state", "get_focuser_position"} <= set(tools)
+
+
+# --- focuser position: unwrap the JSON-RPC envelope --------------------------
+# Found 2026-08-03 during the firmware 8.46 check. The device answers
+# get_focuser_position with the standard envelope and the value nested under
+# "result", but _extract_focus_pos only looked at the top level, so a live scope
+# reporting step 1534 came back as focus_pos: null. _parse_gps already unwraps
+# "result"; this helper did not. Also silently starved run_autofocus, which uses
+# the same helper to seed the Tier-1 focus-drift baseline.
+
+
+def test_extract_focus_pos_unwraps_the_result_envelope():
+    """The real fw 8.46 reply, verbatim from hardware."""
+    from seestar_mcp.server import _extract_focus_pos
+
+    reply = {
+        "jsonrpc": "2.0",
+        "Timestamp": "386.625599726",
+        "method": "get_focuser_position",
+        "result": {"step": 1534},
+        "code": 0,
+        "id": 90293,
+    }
+    assert _extract_focus_pos(reply) == 1534
+
+
+def test_extract_focus_pos_still_accepts_the_flat_shapes():
+    """REGRESSION: bare ints and top-level keys must keep working."""
+    from seestar_mcp.server import _extract_focus_pos
+
+    assert _extract_focus_pos(1200) == 1200
+    assert _extract_focus_pos({"step": 900}) == 900
+    assert _extract_focus_pos({"focus_pos": 42}) == 42
+    assert _extract_focus_pos({"result": 777}) == 777  # result as a bare number
+    assert _extract_focus_pos({}) is None
+    assert _extract_focus_pos(None) is None
+    assert _extract_focus_pos({"result": {"nothing": 1}}) is None

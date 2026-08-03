@@ -1469,15 +1469,42 @@ def _native_fail(value: Any, **extra: Any) -> dict | None:
 
 
 def _extract_focus_pos(focus: Any) -> int | None:
-    """Best-effort focuser-position int from a native focuser response."""
+    """Best-effort focuser-position int from a native focuser response.
+
+    HARDWARE-VALIDATED (Seestar S50, firmware 8.46): the reply is the standard
+    JSON-RPC envelope with the value nested one level down —
+    ``{"method": "get_focuser_position", "result": {"step": 1534}, ...}``. This
+    used to read only the top level, so a live scope reporting step 1534 returned
+    ``None``: ``get_focuser_position`` answered ``focus_pos: null`` and
+    ``run_autofocus`` silently failed to seed the Tier-1 focus-drift baseline.
+
+    The envelope is unwrapped first (as :func:`_parse_gps` already did), then the
+    flat shapes are still accepted so a firmware that returns a bare number or a
+    top-level key keeps working.
+    """
+    if isinstance(focus, bool):
+        return None
     if isinstance(focus, (int, float)):
         return int(focus)
-    if isinstance(focus, dict):
+    if not isinstance(focus, dict):
+        return None
+
+    def _from(d: Any) -> int | None:
+        if isinstance(d, bool):
+            return None
+        if isinstance(d, (int, float)):
+            return int(d)
+        if not isinstance(d, dict):
+            return None
         for key in ("step", "focus_pos", "focuser_position", "position", "value"):
-            val = focus.get(key)
-            if isinstance(val, (int, float)):
+            val = d.get(key)
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
                 return int(val)
-    return None
+        return None
+
+    # Nested envelope wins; fall back to the flat shape.
+    nested = _from(focus.get("result"))
+    return nested if nested is not None else _from(focus)
 
 
 def _parse_gps(dev: Any) -> tuple[float, float] | None:
