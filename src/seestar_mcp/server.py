@@ -350,7 +350,25 @@ class SeestarController:
             return _err(exc)
 
     async def set_filter(self, position: int) -> dict:
-        """Set the filter wheel position (LP / IR-Cut / Dark, by index)."""
+        """Set the filter wheel position by index.
+
+        HARDWARE-VERIFIED (Seestar S50, firmware 8.46) — the device reports its
+        own mapping via the native ``get_wheel_setting``
+        (``{"names": ["dark", "IRCUT", "LP"], ...}``):
+
+        =====  ========  ==================================================
+        index  name      use
+        =====  ========  ==================================================
+        0      dark      shutter closed — dark frames
+        1      IRCUT     broadband; filenames carry ``_IRCUT_``
+        2      LP        light-pollution filter; filenames carry ``_LP_``
+        =====  ========  ==================================================
+
+        Read the current position with ``get_wheel_position`` (returns the bare
+        index) and the wheel's busy/idle state with ``get_wheel_state``. Prefer
+        reading the mapping from ``get_wheel_setting`` rather than trusting this
+        table if a future firmware reorders the wheel.
+        """
         try:
             result = await self.alpaca.method_sync("set_wheel_position", [position])
             if (bad := _native_fail(result, position=position)) is not None:
@@ -1708,9 +1726,11 @@ async def get_run_state() -> dict:
 
 @mcp.tool()
 async def set_filter(position: int) -> dict:
-    """Set the filter wheel position (LP / IR-Cut / Dark).
+    """Set the filter wheel position: 0 = dark, 1 = IRCUT, 2 = LP.
 
     SIDE EFFECT: physically moves the filter wheel to the given index.
+    Index mapping hardware-verified on firmware 8.46; the device reports it via
+    the native ``get_wheel_setting``.
     """
     return await get_controller().set_filter(position)
 

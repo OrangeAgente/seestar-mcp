@@ -45,9 +45,20 @@ if TYPE_CHECKING:
     from .config import Settings
     from .provenance import ProvenanceLog
 
-# FIRMWARE-DEPENDENT: native JSON-RPC method used to enumerate saved subs. The
-# exact spelling is NOT confirmed from a device; update here (one place) when
-# validated against real hardware. Overridable via the ``list_method`` param.
+# FIRMWARE-DEPENDENT: native JSON-RPC method used to enumerate saved subs.
+#
+# PROBED AND ABSENT on firmware 8.46 (2026-08-03): this name and nine other
+# plausible spellings (get_file_list, get_img_list, get_image_list,
+# get_album_list, list_img_files, get_files, get_stacked_img_list,
+# get_img_name_list, get_sub_list) all answer ``{"error": "method not found",
+# "code": 103}`` against a working control call. There is most likely no native
+# listing RPC at all — the app enumerates over the file share.
+#
+# This costs nothing in practice: ``list_subs`` prefers the filesystem/SMB path
+# whenever ``image_root`` is configured, which is the validated route (697 subs
+# for M76 read that way on 8.46). This constant is only reached when no image
+# root is set. Kept, and overridable via ``list_method``, in case a future
+# firmware adds one.
 DEFAULT_LIST_METHOD = "get_img_file_list"
 
 # FIRMWARE-DEPENDENT: SMB share exposing the eMMC image store. Best guess from
