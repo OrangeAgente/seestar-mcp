@@ -425,11 +425,13 @@ class AlpacaClient:
     async def is_slewing(self) -> bool:
         return await self.get_property("slewing")
 
-    async def slew_to_target(self) -> Any:
-        return await self.put_property("slewtotarget")
-
-    async def abort_slew(self) -> Any:
-        return await self.put_property("abortslew")
+    # NOTE: no Alpaca slewtotarget / abortslew wrappers here, deliberately.
+    # Slews go through the NATIVE `iscope_start_view` (see
+    # SeestarController.goto_target) because the Alpaca layer is a lossy view of
+    # this device: `atpark` and `tracking` both disagree with the native
+    # `get_device_state` on firmware 7.75 and 8.46 (see CLAUDE.md). Untested
+    # Alpaca motion wrappers invite a caller to reach for a path that has never
+    # been exercised against the hardware, which is worse than their absence.
 
 
 def _elapsed_ms(started: float) -> float:
