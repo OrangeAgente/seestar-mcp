@@ -344,3 +344,34 @@ def test_status_line_omits_unknown_fields():
     mon = Tier1Monitor(AsyncMock())
     mon.history = [_snap(stacked=5)]
     assert mon.status_line() == "stacked 5"
+
+
+# --- a failed telemetry read must not look like a healthy scope --------------
+# Found 2026-08-03 by exercising every tool surface against a dead bridge.
+# Tier1Snapshot.raw carries view_error/device_error, but the tool boundary does
+# `snap_dict.pop("raw")` to keep output compact — stripping the diagnosis along
+# with the bulk. The caller then saw an all-null snapshot with flags: [] and
+# status_line: "", which reads as "polled fine, nothing wrong" when the truth is
+# "could not read anything". Contract rule 4: unknown != empty.
+
+
+def test_poll_surfaces_read_errors_not_a_silent_null_snapshot():
+    """A snapshot whose reads all failed must say so."""
+    import asyncio
+
+    from seestar_mcp.qa_tier1 import Tier1Monitor
+
+    class DeadAlpaca:
+        async def method_sync(self, method, params=None):
+            raise RuntimeError(f"connection refused: {method}")
+
+    mon = Tier1Monitor(alpaca=DeadAlpaca())
+    snap = asyncio.run(mon.poll())
+    raw = getattr(snap, "raw", None) or {}
+    assert raw.get("view_error"), "view read failure was not captured"
+    assert raw.get("device_error"), "device read failure was not captured"
+    # And the degraded flag the tool boundary can surface without the bulk:
+    assert getattr(snap, "degraded", None) is True, (
+        "snapshot does not expose a boundary-safe degraded signal, so the tool "
+        "layer has nothing to report once raw is stripped"
+    )
