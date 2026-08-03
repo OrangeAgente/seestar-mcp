@@ -26,7 +26,7 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from .models import StackResult
+from .models import StackResult, slug as _slug
 
 if TYPE_CHECKING:
     from .config import RefineSettings
@@ -311,9 +311,3 @@ def stack(
         )
 
 
-def _slug(text: str) -> str:
-    """Filesystem-safe slug for a target name (letters/digits/dashes)."""
-    import re
-
-    slug = re.sub(r"[^A-Za-z0-9]+", "-", (text or "").strip()).strip("-").lower()
-    return slug or "session"

@@ -15,7 +15,6 @@ an arbitrary path from tool args) and provenance-logs every external invocation.
 
 from __future__ import annotations
 
-import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -28,13 +27,8 @@ from .backends import detect_backends
 from .config import RefineSettings, get_settings
 from .handoff import to_xisf, write_pixinsight_config
 from .keeplist import KeepList, load_keep_list
+from .models import slug as _slug
 from .preview import make_preview
-
-
-def _slug(text: str) -> str:
-    """Filesystem-safe slug for a target name (letters/digits/dashes)."""
-    slug = re.sub(r"[^A-Za-z0-9]+", "-", (text or "").strip()).strip("-").lower()
-    return slug or "session"
 
 
 class RefineController:
