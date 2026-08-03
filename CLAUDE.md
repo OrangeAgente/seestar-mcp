@@ -16,7 +16,7 @@ destructive. Runs on a Jetson, driven from the Claude phone app via Remote Contr
 There is **no bare `python`** on the dev machine (Windows Store shim). Always:
 
 ```bash
-uv run pytest            # full suite (currently ~214 tests, all green)
+uv run pytest            # full suite (393 tests, all green)
 uv run ruff check src tests
 uv run python -m seestar_mcp.server   # launch the MCP server (stdio)
 uv run python -c "..."   # one-off checks
@@ -25,6 +25,11 @@ uv run python -c "..."   # one-off checks
 No new dependencies without strong justification — the astronomy is `astropy` (already
 pinned), weather is `httpx`, FITS QA is `photutils`/`numpy`. Deps are exact-pinned and
 hash-locked in `uv.lock`; re-run `uv lock` if you touch `pyproject.toml`.
+
+`seestar_refine`'s stacking/preview deps (`astroalign`, `pillow`, `astroscrappy`) live in
+the **optional `refine` extra**, not in core — `uv sync --extra refine`. The dev group
+self-references it so the suite still covers them. A runtime install without it has **no
+stacking backend** unless DSS is configured; `check_backends` reports that honestly.
 
 ## Architecture — MCP = access, Skills = procedure
 
@@ -41,7 +46,8 @@ hash-locked in `uv.lock`; re-run `uv lock` if you touch `pyproject.toml`.
   - `qa_tier2.py` — photutils per-sub grading (FWHM/HFR/ecc/SNR/background/star-count/wFWHM/
     `scattered_light`) → PASS/MARGINAL/REJECT, session-relative, reason-tagged.
   - `planning/` — `astro.py` (deterministic ephemeris + field-rotation sweet-band), `catalog.py`
-    (120 DSOs), `site.py`, `weather.py` (Open-Meteo), `lightpollution.py`, `ranker.py`,
+    (120 DSOs), `site.py`, `weather.py` (meteoblue when `SEESTAR_METEOBLUE_API_KEY` is
+    set, else keyless Open-Meteo — see `resolve_source`), `lightpollution.py`, `ranker.py`,
     `projects.py`, `obstructions.py` (learned mask), `autonomous.py` (guardrails + scheduler).
   - `config.py` (pydantic-settings, `SEESTAR_` env prefix), `provenance.py`, `secrets.py`.
 
