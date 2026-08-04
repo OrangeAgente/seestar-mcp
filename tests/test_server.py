@@ -8,6 +8,8 @@ than raising.
 
 from __future__ import annotations
 
+import asyncio
+
 import inspect
 from unittest.mock import AsyncMock, MagicMock
 
@@ -449,3 +451,118 @@ def test_extract_focus_pos_still_accepts_the_flat_shapes():
     assert _extract_focus_pos({}) is None
     assert _extract_focus_pos(None) is None
     assert _extract_focus_pos({"result": {"nothing": 1}}) is None
+
+
+# --- weather fetches are cached (the 2026-07-31 credit burn) -----------------
+# A dashboard polled check_night_guardrails once a minute for 11 hours straight
+# through dawn: 951 uncached forecast fetches in one day, against 1-5 on every
+# other day, ~8M meteoblue credits. The guardrail consumes exactly one value
+# from the whole forecast — the tri-state weather_go.
+
+
+def _ctl(tmp_path, ttl=900.0):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from seestar_mcp.config import Settings
+    from seestar_mcp.server import SeestarController
+
+    return SeestarController(
+        settings=Settings(_env_file=None, data_dir=tmp_path, weather_cache_ttl_s=ttl),
+        provenance=MagicMock(), alpaca=AsyncMock(),
+        data=AsyncMock(), tier1=AsyncMock(),
+    )
+
+
+def test_repeated_guardrail_polls_issue_one_weather_fetch(tmp_path, monkeypatch):
+    """60 polls in a TTL window must cost ONE upstream forecast."""
+    from unittest.mock import MagicMock
+
+    from seestar_mcp import server as srv
+
+    calls = {"n": 0}
+
+    async def counting(site, window, illum, **kw):
+        calls["n"] += 1
+        return MagicMock(go=True)
+
+    monkeypatch.setattr(srv, "assess_conditions_weather", counting)
+    c = _ctl(tmp_path)
+    site = MagicMock(lat_deg=45.4, lon_deg=-75.7)
+    for _ in range(60):
+        asyncio.run(c._weather_cached(site, ("a", "b"), 0.0))
+    assert calls["n"] == 1, f"{calls['n']} upstream fetches for 60 polls — cache not applied"
+
+
+def test_cache_refetches_when_the_scope_moves(tmp_path, monkeypatch):
+    """A real change (new site or new night) must not serve a stale forecast."""
+    from unittest.mock import MagicMock
+
+    from seestar_mcp import server as srv
+
+    calls = {"n": 0}
+
+    async def counting(site, window, illum, **kw):
+        calls["n"] += 1
+        return MagicMock(go=True)
+
+    monkeypatch.setattr(srv, "assess_conditions_weather", counting)
+    c = _ctl(tmp_path)
+    a = MagicMock(lat_deg=45.4, lon_deg=-75.7)
+    b = MagicMock(lat_deg=44.0, lon_deg=-79.4)          # scope moved
+    asyncio.run(c._weather_cached(a, ("n1", "n2"), 0.0))
+    asyncio.run(c._weather_cached(a, ("n1", "n2"), 0.0))  # cached
+    asyncio.run(c._weather_cached(b, ("n1", "n2"), 0.0))  # different site
+    asyncio.run(c._weather_cached(a, ("n3", "n4"), 0.0))  # different night
+    assert calls["n"] == 3, f"expected 3 fetches (a, b, new-window), got {calls['n']}"
+
+
+def test_ttl_zero_disables_caching(tmp_path, monkeypatch):
+    """The escape hatch must actually bypass the cache."""
+    from unittest.mock import MagicMock
+
+    from seestar_mcp import server as srv
+
+    calls = {"n": 0}
+
+    async def counting(site, window, illum, **kw):
+        calls["n"] += 1
+        return MagicMock(go=True)
+
+    monkeypatch.setattr(srv, "assess_conditions_weather", counting)
+    c = _ctl(tmp_path, ttl=0.0)
+    site = MagicMock(lat_deg=45.4, lon_deg=-75.7)
+    for _ in range(3):
+        asyncio.run(c._weather_cached(site, ("a", "b"), 0.0))
+    assert calls["n"] == 3
+
+
+def test_cache_survives_a_drifting_dark_window(tmp_path, monkeypatch):
+    """REGRESSION: the window is recomputed from `now`, so its bounds drift.
+
+    The first version of this cache keyed on the raw window tuple. Because
+    dark_window() is derived from the current time, its bounds move by seconds
+    on every call, so the key never repeated and the cache never hit — measured
+    at 10 upstream fetches for 10 polls even though the unit test (which passed
+    a fixed tuple) was green. Keying truncates to the hour.
+    """
+    from unittest.mock import MagicMock
+
+    from seestar_mcp import server as srv
+
+    calls = {"n": 0}
+
+    async def counting(site, window, illum, **kw):
+        calls["n"] += 1
+        return MagicMock(go=True)
+
+    monkeypatch.setattr(srv, "assess_conditions_weather", counting)
+    c = _ctl(tmp_path)
+    site = MagicMock(lat_deg=45.4, lon_deg=-75.7)
+    # Same night, bounds drifting by seconds — exactly what the live path does.
+    for sec in range(0, 40, 4):
+        window = (f"2026-08-04T02:35:{sec:02d}.123456", f"2026-08-04T07:45:{sec:02d}.123456")
+        asyncio.run(c._weather_cached(site, window, 0.71))
+    assert calls["n"] == 1, (
+        f"{calls['n']} fetches for a drifting-but-identical window — the cache "
+        "key is time-sensitive again"
+    )

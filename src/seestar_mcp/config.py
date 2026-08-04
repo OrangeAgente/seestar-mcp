@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # source with Open-Meteo as fallback; empty = Open-Meteo only. Not a device
     # secret, but keep it out of source: it lives only in the gitignored .env.
     meteoblue_api_key: str = ""
+    # Weather forecasts do not change minute to minute, and check_night_guardrails
+    # uses only the tri-state weather_go. An uncached poll loop burned ~8M meteoblue
+    # credits on 2026-07-31 (951 fetches in one day). 15 min caps a once-a-minute
+    # poller at ~4 fetches/hour instead of 60. Set 0 to disable caching.
+    weather_cache_ttl_s: float = 900.0
 
     # --- Seestar device on the LAN ---
     seestar_host: str = "127.0.0.1"  # Seestar LAN IP (station mode, DHCP reservation)

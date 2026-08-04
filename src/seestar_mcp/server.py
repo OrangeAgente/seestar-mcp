@@ -26,6 +26,7 @@ signature; credentials live only in :mod:`seestar_mcp.secrets`.
 
 from __future__ import annotations
 
+import time
 import dataclasses
 import json
 import re
@@ -93,6 +94,46 @@ class SeestarController:
         self.alpaca = alpaca
         self.data = data
         self.tier1 = tier1
+        #: TTL cache for the weather assessment: (key, monotonic_deadline, value).
+        #: Lives in the TOOL layer on purpose — ``planning/`` must not read the
+        #: clock (see CLAUDE.md), and this needs one.
+        self._weather_cache: tuple[tuple, float, Any] | None = None
+
+    async def _weather_cached(self, site, window, illum):
+        """Weather assessment, reused within ``qa_weather_cache_ttl_s``.
+
+        Why this exists: ``check_night_guardrails`` consumes exactly ONE value
+        from the assessment — the tri-state ``weather_go`` — but each call used
+        to issue a fresh two-package meteoblue request (``basic-1h_clouds-3h``)
+        spanning the whole dark window. On 2026-07-31 a dashboard polled the
+        guardrail once a minute for eleven hours, straight through dawn: 951
+        uncached forecast fetches in one day against 1-5 on every other day.
+
+        Forecasts do not move minute to minute, so one fetch is reused for the
+        whole TTL. The key includes the site and window, so a real change (the
+        scope moves, a new night) still refetches immediately.
+        """
+        # The window bounds are recomputed from `now` on every call, so they
+        # drift by seconds continuously — keying on them verbatim defeats the
+        # cache entirely (measured: 10 fetches for 10 polls). Truncate each
+        # bound to the hour: a forecast whose window moved 40 seconds is the
+        # same forecast, while a genuinely different night still misses.
+        key = (
+            round(float(site.lat_deg), 3),
+            round(float(site.lon_deg), 3),
+            tuple(str(b)[:13] for b in window),  # 'YYYY-MM-DDTHH'
+            round(float(illum), 1),
+        )
+        now = time.monotonic()
+        cached = self._weather_cache
+        if cached is not None and cached[0] == key and now < cached[1]:
+            return cached[2]
+        value = await assess_conditions_weather(
+            site, window, illum, api_key=self.settings.meteoblue_api_key
+        )
+        ttl = max(0.0, float(self.settings.weather_cache_ttl_s))
+        self._weather_cache = (key, now + ttl, value)
+        return value
 
         # Per-session state.
         self.session_id: str | None = None
@@ -830,10 +871,7 @@ class SeestarController:
             )
             window = dark_window(site_for_engine, when)
             illum = moon_illumination(when)
-            assessment = await assess_conditions_weather(
-                site_for_engine, window, illum,
-                api_key=self.settings.meteoblue_api_key,
-            )
+            assessment = await self._weather_cached(site_for_engine, window, illum)
             return {"ok": True, "location": block, **dataclasses.asdict(assessment)}
         except Exception as exc:  # noqa: BLE001 - tool-facing never-raise contract
             return {"ok": False, "error": str(exc)}
@@ -918,10 +956,7 @@ class SeestarController:
             )
             illum = moon_illumination(when)
             window = dark_window(site_for_engine, when)
-            conditions = await assess_conditions_weather(
-                site_for_engine, window, illum,
-                api_key=self.settings.meteoblue_api_key,
-            )
+            conditions = await self._weather_cached(site_for_engine, window, illum)
             projects = (
                 load_projects(self._projects_path()) if prefer_projects else None
             )
@@ -1020,11 +1055,10 @@ class SeestarController:
                 # an obstruction; an outage leaves weather_go None (counts as ok).
                 try:
                     weather_go = (
-                        await assess_conditions_weather(
+                        await self._weather_cached(
                             site,
                             dark_window(site, now),
                             0.0,
-                            api_key=self.settings.meteoblue_api_key,
                         )
                     ).go
                 except Exception:  # noqa: BLE001 - weather outage is non-fatal
@@ -1193,11 +1227,10 @@ class SeestarController:
             # Weather is best-effort and non-fatal: an outage → unknown, which
             # the guardrail core treats as observability-only, not a hard stop.
             try:
-                weather_go = (
-                    await assess_conditions_weather(
-                        site, dark, 0.0, api_key=self.settings.meteoblue_api_key
-                    )
-                ).go
+                # Cached: this is the call that burned ~8M meteoblue credits on
+                # 2026-07-31 when a dashboard polled it once a minute for 11
+                # hours. The guardrail uses only `.go` from the whole forecast.
+                weather_go = (await self._weather_cached(site, dark, 0.0)).go
             except Exception:  # noqa: BLE001 - weather outage is non-fatal
                 weather_go = None
 
