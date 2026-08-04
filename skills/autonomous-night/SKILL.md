@@ -32,6 +32,30 @@ and park (fail safe).**
 - Provenance: the tools log their calls; you add a one-line human-readable note per
   guardrail decision and target switch.
 
+## Phase A0 — Arm the watch (MANDATORY, before the dry run)
+
+See **`run-session` Phase 0** for the full rationale; it is required here too and
+matters more, because "unattended" is the whole point of this skill.
+
+Before proposing anything, arm both:
+
+1. **A time-driven heartbeat** — a recurring wakeup roughly every 15 minutes for
+   the whole dark window. An agent only exists while something invokes it; an
+   event `Monitor` is silent when nothing is wrong and therefore leaves the run
+   unsupervised through every *normal* decision (goal reached, altitude floor,
+   scheduled switch). A Monitor supplements the heartbeat; it never replaces it.
+2. **A detached park watchdog** — a plain HTTP script, no MCP and no agent, that
+   parks at a fixed dawn deadline and survives the session ending.
+
+**An autonomous night without a heartbeat is not autonomous — it is a single
+goto followed by silence.** On 2026-08-03/04 exactly that happened: the planned
+target switch never fired because nothing invoked the agent, and the only thing
+that behaved correctly overnight was the detached watchdog.
+
+If you cannot arm a heartbeat, say so before the run and treat the night as
+single-target: one acquisition plus the watchdog park. Do not present a
+multi-target schedule you have no mechanism to execute.
+
 ## Phase A — Propose (NO MOTION, mandatory confirmation gate)
 1. `simulate_night` (optionally pass `types` / `limit` if the user asked). This is a
    **dry run — it issues NO motion.** It returns the conditions verdict, the dark
@@ -125,6 +149,10 @@ Reached on any hard stop, unrecoverable fault, end of schedule, or user stop.
    link). Otherwise leave the scope parked and connected.
 
 ## Hard rules
+- **Arming a time-driven heartbeat AND a detached park watchdog is MANDATORY before
+  any motion** (Phase A0). An event Monitor does not satisfy this — it is silent
+  exactly when the night's normal decisions come due. Never call an agent-dependent
+  step "scheduled": it is scheduled only if something outside the agent runs it.
 - **The dry-run + explicit confirmation before motion is MANDATORY and non-skippable.**
   Nothing moves in Phase A. The first motion command only follows an explicit user
   go-ahead.
