@@ -27,7 +27,60 @@ tools. Follow the phases in order. Do not skip pre-flight. Treat every motion co
 - "Save each frame in enhancing" should be ON so Tier-2 QA has subs to score. If the
   user has not confirmed this, remind them once at session start; do not nag.
 
-## Phase 0 — Pre-flight (always run before goto)
+## Phase 0 — Arm the watch (MANDATORY, before anything else)
+
+**Do not slew, stack, or contact the device until both of these are armed.** This
+is a hard gate, like the dry-run confirmation in `autonomous-night`.
+
+An agent is **turn-based**: it only exists while something invokes it. A session
+left without a heartbeat is not "watching" — it is asleep, and it will stay
+asleep through every decision the night needs.
+
+**1. A TIME-DRIVEN heartbeat.** Arm a recurring wakeup (`/loop`, a scheduled
+wakeup, or cron) for roughly every **15 minutes across the whole dark window**,
+before the first goto. On each wake: re-read altitude against the floor, drop
+rate, goal progress, and whether a planned target switch is due.
+
+**2. A DETACHED park watchdog.** A plain script — no MCP, no agent — that talks
+to `seestar_alp` over HTTP, and at a fixed dawn deadline stops the view and
+parks, exiting quietly if the mount is already folded. It must survive the agent
+dying, the session ending, and the client closing. **This is the only layer that
+protects the hardware when everything else is gone.**
+
+### An event Monitor is NOT a heartbeat
+
+This mistake cost a real night (2026-08-03/04). A `Monitor` is **event-driven**:
+it wakes the agent only when something fires. Silence means no invocation. So an
+agent "monitoring" via Monitor alone is dormant for as long as nothing goes
+wrong — which is most of a good night.
+
+Telescope sessions are exactly where that fails, because the decisions that
+matter are **not anomalies**:
+
+- a target reaching its integration goal
+- a target sinking toward the altitude floor
+- a scheduled target switch coming due
+- the moon rising into the field
+
+None of these fire an alert. On that night the agent planned M13 → M34 at
+05:05Z, armed a Monitor, and was never invoked again until the park at 07:40Z.
+M13 ran ~179 min instead of 85; M34 got nothing. Nothing failed — nobody was
+awake. Use a Monitor **in addition to** the heartbeat, never instead of it.
+
+Also tell the Monitor about the planned park time, or the scheduled fold reports
+as an "unexpected park" — the only alert that night was that false positive.
+
+### State the guarantee honestly
+
+Before the user goes to bed, say plainly which layer survives you:
+
+> Heartbeat every 15 min while this session lives; a detached watchdog parks at
+> 07:40Z regardless. If this session ends, target switches stop — the park does not.
+
+Never describe an agent-dependent step as "scheduled". It is scheduled only if
+something outside the agent will run it.
+
+## Phase 0.1 — Pre-flight (always run before goto)
 1. `get_status` — confirm the mount is connected and not already slewing. If not
    connected, `connect_telescope` first. **If both fail, work out WHICH link is down before
    touching anything** — they need opposite fixes and this is the most common first-run
