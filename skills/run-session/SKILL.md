@@ -47,6 +47,16 @@ parks, exiting quietly if the mount is already folded. It must survive the agent
 dying, the session ending, and the client closing. **This is the only layer that
 protects the hardware when everything else is gone.**
 
+Use the shipped one — do not hand-roll it:
+
+```bash
+nohup deploy/dawn_park_watchdog.sh "2026-08-04 07:40:00" /tmp/wd.log >/dev/null 2>&1 &
+```
+
+It reads `SEESTAR_ALPACA_BASE_URL` / `SEESTAR_ALPACA_DEVICE_NUM`, confirms the
+fold via the device's own `mount.close` (Alpaca's `/atpark` disagrees on
+firmware 7.75 and 8.46), and exits non-zero with a warning if it cannot confirm.
+
 ### An event Monitor is NOT a heartbeat
 
 This mistake cost a real night (2026-08-03/04). A `Monitor` is **event-driven**:

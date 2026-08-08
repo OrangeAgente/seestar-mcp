@@ -44,8 +44,14 @@ Before proposing anything, arm both:
    event `Monitor` is silent when nothing is wrong and therefore leaves the run
    unsupervised through every *normal* decision (goal reached, altitude floor,
    scheduled switch). A Monitor supplements the heartbeat; it never replaces it.
-2. **A detached park watchdog** — a plain HTTP script, no MCP and no agent, that
-   parks at a fixed dawn deadline and survives the session ending.
+2. **A detached park watchdog** — use the shipped
+   **`deploy/dawn_park_watchdog.sh`**; do not hand-roll one:
+
+   ```bash
+   nohup deploy/dawn_park_watchdog.sh "2026-08-04 07:40:00" /tmp/wd.log >/dev/null 2>&1 &
+   ```
+
+   Plain HTTP, no MCP and no agent, so it survives the session ending.
 
 **An autonomous night without a heartbeat is not autonomous — it is a single
 goto followed by silence.** On 2026-08-03/04 exactly that happened: the planned

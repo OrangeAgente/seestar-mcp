@@ -187,8 +187,43 @@ rather than failing at import.
 
 ## Configuration
 
+Start from the template — it is commented and covers everything a first run needs:
+
+```bash
+cp .env.example .env      # then edit; .env is gitignored and must stay that way
+```
+
 All settings are overridable via environment variables with the `SEESTAR_` prefix (e.g.
 `SEESTAR_ALPACA_BASE_URL`). Key variables:
+
+### Weather providers
+
+**The default is free and needs no key.** Leave `SEESTAR_METEOBLUE_API_KEY` unset and the
+planner uses **[Open-Meteo](https://open-meteo.com)** — keyless, no account, no quota —
+which is enough for the go/no-go verdict, cloud cover, wind and dew risk. Most users never
+need anything else.
+
+**meteoblue is an optional upgrade, and it is metered.** Setting a key switches the planner
+to meteoblue's multi-model forecast, which can be better on marginal nights. Before you
+enable it:
+
+> On 2026-07-31 a dashboard polled `check_night_guardrails` once a minute for eleven hours —
+> including all day after the session ended — and burned roughly **8 million meteoblue
+> credits in one day**. Each guardrail call issued a fresh two-package forecast, and the
+> guardrail consumes exactly one boolean out of it.
+
+That is fixed here: `SEESTAR_WEATHER_CACHE_TTL_S` (default **900 s**) reuses a forecast
+across calls and cuts it by ~95% — 20 polls now cost 1 fetch. You are still paying per
+fetch, so **if anything polls this server on a timer, confirm the cache is on before adding
+a key.**
+
+To enable meteoblue:
+
+1. Get a key at <https://www.meteoblue.com/en/weather-api>.
+2. Uncomment `SEESTAR_METEOBLUE_API_KEY` in your `.env` and paste it in.
+3. Keep it in `.env` only — never commit it, never paste it into an issue. The provenance
+   log redacts anything matching `key`/`secret`/`token`, so it will not leak there.
+4. Watch your credit usage on the first night.
 
 | Env var | Default | Purpose |
 |---|---|---|
@@ -309,8 +344,8 @@ weather + moon + twilight, and `plan_targets` returns a ranked shortlist optimiz
 *clean* alt-az data (field-rotation sweet-band time, light-pollution fit, moon
 separation, FOV framing), and every score is reason-tagged. With no profile, the tools
 fall back to the scope's GPS and a default Bortle. Weather is the only external call
-(`api.open-meteo.com`, keyless by default — or `my.meteoblue.com` when
-`SEESTAR_METEOBLUE_API_KEY` is set) and a failure is non-fatal. The **`observing-planner`**
+(see [Weather providers](#weather-providers) — free and keyless by default) and a failure
+is non-fatal. The **`observing-planner`**
 skill drives this flow and hands the chosen target to `run-session`.
 
 The planner now also has **projects/history** (it boosts targets that still need data,
