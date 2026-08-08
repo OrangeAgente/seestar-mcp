@@ -36,8 +36,8 @@ Each skill defers rather than duplicates, so install them together — used alon
 reference guidance that isn't there.
 
 **Processing skills moved out.** `image-refinement` and `astro-processing` now live in
-[seestar-refine](https://github.com/OrangeAgente/seestar-refine) with the service they drive. This bundle is about collecting good
-data and knowing what is still outstanding.
+`seestar-refine` (a separate, not-yet-published repo) with the service they drive. This
+bundle is about collecting good data and knowing what is still outstanding.
 
 ## Glossary
 
@@ -98,7 +98,7 @@ take a minute, and it may log one failed handshake before a retry succeeds.
 
 ```bash
 git clone https://github.com/OrangeAgente/seestar-mcp
-cd SeeStar-AI
+cd seestar-mcp
 uv sync
 ```
 
@@ -141,8 +141,8 @@ for a conditions verdict and a ranked target list. Both are read-only — nothin
 
 ## Compatibility
 
-Validated against a **Seestar S50** in **alt-az**, station mode, firmware **7.75**, with
-`seestar-mcp` 0.1.0. EQ-mode (wedge) users should expect the field-rotation guidance to be
+Validated against a **Seestar S50** in **alt-az**, station mode, firmware **7.75 and 8.46**,
+with `seestar-mcp` 0.1.0. EQ-mode (wedge) users should expect the field-rotation guidance to be
 conservative — rotation is the alt-az constraint these skills are built around.
 
 **Firmware changes are the expected breakage vector.** Device method names are the first
