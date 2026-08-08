@@ -99,7 +99,7 @@ The report aggregates per-sub verdicts plus session trends. When summarizing it:
    consume — Seestar subs arrive already calibrated, so no separate darks/flats step is
    needed. Stacking and post-processing are outside this bundle: any stacker that accepts a
    file list will do. For a guided path, the `image-refinement` and `astro-processing`
-   skills live in [seestar-refine](https://github.com/OrangeAgente/seestar-refine).
+   skills live in `seestar-refine` (a separate, not-yet-published repo).
 Keep it to a few lines unless the user asks for the full per-sub breakdown.
 
 ## Hard rules
