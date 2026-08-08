@@ -35,18 +35,9 @@ autonomous-night     orchestrates all four for a whole unattended night
 Each skill defers rather than duplicates, so install them together — used alone they will
 reference guidance that isn't there.
 
-**Not part of this bundle:** the repo also ships `image-refinement` and `astro-processing`
-skills for stacking and post-processing finished images. They are not required to run an
-observing night. Neither needs an external application — the pure-Python `pystack` backend
-stacks without DeepSkyStacker or PixInsight — but it does need one extra install step,
-because `astroalign` ships in an optional extra:
-
-```bash
-uv sync --extra refine
-```
-
-DeepSkyStacker (Windows) and PixInsight remain optional alternatives; `check_backends`
-reports which of the three are actually present on your host.
+**Processing skills moved out.** `image-refinement` and `astro-processing` now live in
+[seestar-refine](https://github.com/OrangeAgente/seestar-refine) with the service they drive. This bundle is about collecting good
+data and knowing what is still outstanding.
 
 ## Glossary
 

@@ -15,7 +15,6 @@ uv sync                          # install from the hash-locked uv.lock
 uv run pytest                    # run the full test suite (offline, deterministic)
 uv run ruff check src tests      # lint
 uv run python -m seestar_mcp.server      # launch the MCP server (stdio)
-uv run python -m seestar_refine.server   # launch the refinement service (stdio)
 ```
 
 `make test` / `make lint` / `make run` wrap the same commands.
