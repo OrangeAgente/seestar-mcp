@@ -8,23 +8,19 @@ device paths are not yet hardware-validated (see the README "Status & limitation
 ## [Unreleased]
 
 ### Added
-- **AstroPipe — a pure-Python, DSS/PixInsight-free refinement pipeline** (`seestar-refine`):
-  - `pystack` backend (`astroalign` + numpy): debayer → star-triangle registration →
-    memmap-bounded sigma-clipped integration → `(3,H,W)` master; visually equivalent to
-    DSS on 286 real M27 subs. Exposed as `stack_keep_list(engine="pystack")` and reported
-    by `check_backends`.
-  - Post-processing stages via `stretch_master` params: gradient removal
-    (star-masked `Background2D`), star-based white balance, Richardson-Lucy
-    deconvolution, saturation, and an opt-in resolution upscale (Lanczos default; the AI
-    path is provenance-labeled "AI-generated detail, not captured signal").
-  - Percentile white point in `auto_stretch` so faint/compact targets aren't crushed.
 - Open-source release hygiene: `LICENSE` (MIT), `NOTICE` (trademark, §1201(f), and
   third-party attribution), `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, this changelog, an
   `AUTHORS` file, GitHub Actions CI (Linux + Windows), and issue/PR templates.
-- Field-rotation **autocrop** for stacked masters, with a coverage-oriented threshold
-  (`coverage_frac`) tuned against real data.
 - Packaging metadata in `pyproject.toml` (SPDX license, authors, keywords, classifiers,
   project URLs).
+
+### Removed
+- **Refinement moved to its own repository** (`seestar-refine`, 2026-08-08): the AstroPipe
+  pipeline, the `pystack` backend, the `stack_keep_list` / `stretch_master` /
+  `check_backends` / `list_masters` / `prepare_pixinsight_handoff` tools, field-rotation
+  autocrop, and the `image-refinement` and `astro-processing` skills. This repo now covers
+  capture and QA only; `qa_tier2` is carried in both by design. Its `astroalign`,
+  `astroscrappy` and `pillow` dependencies went with it.
 
 ### Fixed
 - Observing planner crashed whenever called with default `date=None` (offset-suffixed
