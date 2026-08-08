@@ -819,3 +819,15 @@ def test_contract_coverage_count_matches_the_tools_it_names():
 
     real = len(asyncio.run(mcp.list_tools()))
     assert total == real, f"contract says {total} total tools; server has {real}"
+
+    # The "Enforced by" row states this file's own test count, and that drifted
+    # too: it read 20 while the file held 21, because `async def test_` does not
+    # match a `^def test_` count. Count both spellings rather than trust prose.
+    own = re.findall(
+        r"^(?:async )?def (test_\w+)", Path(__file__).read_text(encoding="utf-8"), re.M
+    )
+    enforced = re.search(r"\*\*Enforced by\*\*.*?\((\d+) tests", contract)
+    assert enforced, "Status table has no 'Enforced by ... (N tests' row"
+    assert int(enforced.group(1)) == len(own), (
+        f"contract claims {enforced.group(1)} tests; this file defines {len(own)}"
+    )

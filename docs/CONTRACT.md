@@ -14,7 +14,7 @@ it end to end.
 | **Version** | 1.1.1 |
 | **Covers** | 11 of 34 tools — the ones a consumer actually parses |
 | **Validated against a real consumer** | yes — the SeeStar Console parsed a real 25-sub `qa_tier2` payload with an independently written schema, first try, no changes |
-| **Enforced by** | `tests/test_console_contract.py` (20 tests, all 11 pinned at the tool boundary) |
+| **Enforced by** | `tests/test_console_contract.py` (21 tests, all 11 pinned at the tool boundary) |
 
 ## The rules
 
