@@ -367,7 +367,7 @@ from `run-session`, faults from `anomaly-playbook`).
 ## Processing your data — `seestar-refine`
 
 Refinement (grade → keep-list → stack → stretch) **moved to its own repository** on
-2026-08-08: **[seestar-refine](https://github.com/OrangeAgente/seestar-refine)**.
+2026-08-08: **`seestar-refine`** (not yet published).
 
 The split is along a product seam. This repo answers *"what do I still need tonight?"* —
 it runs the scope and scores what you collected, so the planner knows what is outstanding.
@@ -376,7 +376,7 @@ different moment.
 
 The two are independent: `seestar-refine` shares no code with this repo and works on **any**
 folder of FITS, not just a Seestar's. Use this server alone, optionally add the
-[SeeStar Console](https://github.com/OrangeAgente/seestar-mcp) dashboard, and optionally
+[SeeStar Console](https://github.com/OrangeAgente/seestar-dashboard) dashboard, and optionally
 add refinement when you want to process.
 
 `qa_tier2` deliberately lives in **both** — here it tells you what to collect next, there it
@@ -403,7 +403,7 @@ ability to reach the telescope, the FITS files, and the QA computations; the Ski
   (`simulate_night`), get one explicit go-ahead, then loop target-by-target under hard
   guardrails (`check_night_guardrails`) and park at dawn or on any hard stop.
 The processing run-books (`image-refinement`, `astro-processing`) moved with the service to
-[seestar-refine](https://github.com/OrangeAgente/seestar-refine); `qa-policy` stays here
+`seestar-refine`; `qa-policy` stays here
 because grading is what tells the planner what is still outstanding.
 
 Skills stay at roughly ~100 tokens of description until they are invoked, so they add almost
@@ -436,4 +436,4 @@ the laws of your own jurisdiction. See [`NOTICE`](NOTICE) for full third-party a
 Licensed under the [MIT License](LICENSE). It drives, but never bundles or redistributes,
 `seestar_alp` (GPL-3.0, separate process); it remains under its own license. (Processing
 tools — DeepSkyStacker, PixInsight, `pixinsight-mcp` — are used by the separate
-[seestar-refine](https://github.com/OrangeAgente/seestar-refine) repo, not by this one.)
+`seestar-refine` repo, not by this one.)
