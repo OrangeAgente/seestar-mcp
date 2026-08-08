@@ -341,7 +341,25 @@ class DataClient:
         list when no matching dir. Never raises.
         """
         if not target:
-            return []
+            # No target = "list everything", not "there is nothing". This used to
+            # return [] here, so list_subs() with no argument answered
+            # {"ok": true, "count": 0} — a caller asking what the scope holds was
+            # told nothing, when the true answer was everything. The tool
+            # documents `target` as optional, so honour that: walk each
+            # `<Target>_sub` directory under the image root.
+            out: list[SubInfo] = []
+            try:
+                entries = sorted(Path(self.image_root).iterdir())
+            except OSError:
+                return []
+            for entry in entries:
+                if not entry.is_dir():
+                    continue
+                match = _TARGET_SUB_RE.match(entry.name)
+                if match is None:
+                    continue
+                out.extend(self._list_subs_fs(match.group("target")))
+            return out
         sub_dir = self._find_sub_dir(self.image_root, target)
         if sub_dir is None:
             return []

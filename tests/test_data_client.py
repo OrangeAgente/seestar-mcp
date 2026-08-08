@@ -477,3 +477,51 @@ async def test_image_root_empty_uses_method_sync():
     subs = await client.list_subs("M31")
     alpaca.method_sync.assert_awaited_once()
     assert len(subs) == 1
+
+
+# --- list_subs with no target must enumerate, not report "none" -------------
+# Found by exercising every tool surface (2026-08-03). list_subs(target=None)
+# returned {"ok": true, "count": 0, "subs": []} because _list_subs_fs bailed on
+# `if not target: return []`. The tool documents target as OPTIONAL, so a caller
+# asking "what's on the scope?" was told "nothing" when the real answer was
+# "everything". Contract rule 4: unknown/unasked is not empty.
+
+
+def test_list_subs_without_a_target_enumerates_every_target(tmp_path):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from seestar_mcp.data_client import DataClient
+
+    for name, n in (("M13", 3), ("NGC7635", 2)):
+        d = tmp_path / f"{name}_sub"
+        d.mkdir()
+        for i in range(n):
+            (d / f"Light_{name}_10.0s_{i}.fit").write_bytes(b"x")
+    (tmp_path / "notes.txt").write_bytes(b"x")          # ignored
+    (tmp_path / "M13").mkdir()                          # stacked dir, not _sub
+
+    dc = DataClient(alpaca=AsyncMock(), host="127.0.0.1", image_root=str(tmp_path))
+    subs = asyncio.run(dc.list_subs(None))
+
+    assert len(subs) == 5, f"expected 5 subs across both targets, got {len(subs)}"
+    assert {s.target for s in subs} == {"M13", "NGC7635"}
+
+
+def test_list_subs_with_a_target_still_filters(tmp_path):
+    """REGRESSION: the per-target path must keep working unchanged."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from seestar_mcp.data_client import DataClient
+
+    for name, n in (("M13", 3), ("NGC7635", 2)):
+        d = tmp_path / f"{name}_sub"
+        d.mkdir()
+        for i in range(n):
+            (d / f"Light_{name}_10.0s_{i}.fit").write_bytes(b"x")
+
+    dc = DataClient(alpaca=AsyncMock(), host="127.0.0.1", image_root=str(tmp_path))
+    subs = asyncio.run(dc.list_subs("M13"))
+    assert len(subs) == 3
+    assert {s.target for s in subs} == {"M13"}
