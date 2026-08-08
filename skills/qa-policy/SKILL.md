@@ -98,8 +98,8 @@ The report aggregates per-sub verdicts plus session trends. When summarizing it:
 4. Point to the keep-list path for re-stacking. The kept subs are what a stacker should
    consume — Seestar subs arrive already calibrated, so no separate darks/flats step is
    needed. Stacking and post-processing are outside this bundle: any stacker that accepts a
-   file list will do, and this repo also ships separate `image-refinement` and
-   `astro-processing` skills if you want a guided path.
+   file list will do. For a guided path, the `image-refinement` and `astro-processing`
+   skills live in [seestar-refine](https://github.com/OrangeAgente/seestar-refine).
 Keep it to a few lines unless the user asks for the full per-sub breakdown.
 
 ## Hard rules

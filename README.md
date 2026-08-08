@@ -71,8 +71,6 @@ are flagged `# FIRMWARE-DEPENDENT` in the source (single, well-marked update poi
 - the on-device sub-listing method (`get_img_file_list`) used by `list_subs` — probed and
   ABSENT on firmware 8.46, along with nine other plausible spellings; `list_subs` uses the
   SMB/filesystem path instead whenever an image root is configured;
-- the PixInsight/WBPP refinement path on Windows (the external `pixinsight-mcp` is
-  macOS-tested; the DSS path is the validated default);
 - motion, autofocus, plate-solve and imaging on **firmware 8.46** — the read paths and the
   filter wheel were re-verified there, but goto/stack were not (daylight at the time).
 
@@ -97,10 +95,6 @@ instead.
 - A **user-supplied firmware interop key** for Seestar firmware 7.18+ (you extract it from
   your own licensed ZWO app under 17 U.S.C. §1201(f); this project ships none. See
   [Legal & trademarks](#legal--trademarks)).
-- **[DeepSkyStacker](https://deepskystacker.free.fr)** (`DeepSkyStackerCL`) on the processing
-  host for the `seestar-refine` service.
-- *Optional:* **PixInsight** + the external
-  **[`pixinsight-mcp`](https://github.com/aescaffre/pixinsight-mcp)** for the full-finish path.
 - *Optional (hands-free data pull):* the SMB/filesystem backend requires a **machine-wide
   Windows SMB relaxation**. See the caveat under [Configuration](#configuration) and
   [`SECURITY.md`](SECURITY.md#data-access-the-smb--filesystem-backend-host-wide-caveat).
@@ -171,19 +165,7 @@ make lint   # or: uv run ruff check src tests
 
 Never invoke a bare `python`; always go through `uv run` so the locked environment is used.
 
-`uv sync` gives you the full dev environment. For a **runtime-only** install, the
-stacking/preview dependencies are an optional extra:
-
-```bash
-uv sync --no-dev                  # telescope control + two-tier QA (50 packages)
-uv sync --no-dev --extra refine   # ...plus seestar_refine stacking + previews (60)
-```
-
-The extra (`pillow`, `astroalign`, `astroscrappy`, and the scikit-image they pull —
-about 39 MB) is only needed by `seestar_refine`. Without it the MCP server is fully
-functional and the refine tools degrade honestly: `check_backends` reports
-`pystack: false` and the stacking/preview tools return `{"ok": false, "error": ...}`
-rather than failing at import.
+`uv sync` installs everything. For a runtime-only install use `uv sync --no-dev`.
 
 ## Configuration
 
@@ -382,87 +364,23 @@ host or inbound surface; it is the same audited tools driven in a visible loop. 
 **`autonomous-night`** skill drives this flow (planning from `observing-planner`, execution
 from `run-session`, faults from `anomaly-playbook`).
 
-## Image refinement (`seestar-refine`)
+## Processing your data — `seestar-refine`
 
-Refinement runs as a **separate MCP service** in this repo, `seestar-refine`, on the
-processing machine (the Windows / RTX-4090 box, where DeepSkyStacker and, optionally,
-PixInsight are installed). It takes the QA **keep-list** (from `qa_session_report`) and
-turns it into a finished image. It is a distinct concern with external desktop-app
-dependencies, so it is its own FastMCP server, registered separately from `seestar-mcp`.
+Refinement (grade → keep-list → stack → stretch) **moved to its own repository** on
+2026-08-08: **[seestar-refine](https://github.com/OrangeAgente/seestar-refine)**.
 
-Three stacking backends, chosen by availability and the user's wish:
+The split is along a product seam. This repo answers *"what do I still need tonight?"* —
+it runs the scope and scores what you collected, so the planner knows what is outstanding.
+`seestar-refine` answers *"make this image good."* Different session, different software,
+different moment.
 
-- **DeepSkyStacker (DSS)**: registers + integrates the keep-list into a master and an
-  auto-stretched PNG preview. Complete on its own (when DSS is installed).
-- **pystack**: a **pure-Python, DSS-free** backend (`astroalign` + numpy): debayer →
-  star-triangle registration → memmap-bounded sigma-clipped integration → `(3,H,W)`
-  master. **Cross-platform, no external app, and visually equivalent to DSS** on Seestar
-  data (validated on 286 real M27 subs). Use `engine="pystack"`.
-- **PixInsight**: the **optional full finish** (only if installed): stack via WBPP,
-  then hand the master to the user's **external
-  [`pixinsight-mcp`](https://github.com/aescaffre/pixinsight-mcp)** server for its
-  quality-gated creative processing. That server is the user's own install
-  (macOS-tested; Windows unverified). This repo drives it if reachable, it does not
-  vendor it.
+The two are independent: `seestar-refine` shares no code with this repo and works on **any**
+folder of FITS, not just a Seestar's. Use this server alone, optionally add the
+[SeeStar Console](https://github.com/OrangeAgente/seestar-mcp) dashboard, and optionally
+add refinement when you want to process.
 
-### Register line
-
-Like `seestar-mcp`, it speaks MCP over **stdio**, with no network port. Register it on the
-processing host **before** starting the Claude Code session:
-
-```bash
-claude mcp add seestar-refine -- uv --directory C:/path/to/SeeStar-AI run python -m seestar_refine.server
-```
-
-### Configuration
-
-All settings are overridable via environment variables with the `SEESTAR_REFINE_`
-prefix. It holds **no secrets**, only non-sensitive desktop-app paths and directories.
-
-| Env var | Default | Purpose |
-|---|---|---|
-| `SEESTAR_REFINE_DSS_CLI` | `""` | Path to `DeepSkyStackerCL(.exe)`. Empty ⇒ DSS not available. |
-| `SEESTAR_REFINE_PIXINSIGHT_EXE` | `""` | Path to `PixInsight(.exe)`. Empty ⇒ the PixInsight/WBPP path is not offered. |
-| `SEESTAR_REFINE_DATA_DIR` | `./data` | Shared dir holding the QA reports + subs to refine. |
-| `SEESTAR_REFINE_OUTPUT_DIR` | `./data/refine` | Where masters, previews, and `refine_provenance.jsonl` are written. |
-| `SEESTAR_REFINE_REJECTION` | `kappa-sigma` | Pixel-rejection algorithm for stacking. |
-| `SEESTAR_REFINE_ALIGNMENT` | `auto` | Star-alignment mode. |
-
-Only configured executables are ever run; a configured-but-missing exe is refused. A
-missing/empty path simply means that backend is unavailable (`check_backends` reports it).
-
-### Tools (5)
-
-| Tool | Description |
-|---|---|
-| `check_backends` | Report which backends are available: DSS CLI, **pystack** (astroalign), PixInsight, and the external `pixinsight-mcp` bridge. Read-only. |
-| `stack_keep_list` | Stack a target's QA keep-list into a master. `engine`: `dss`/`auto`, **`pystack`** (pure-Python, no external app), or `wbpp` (PixInsight, if available). SIDE EFFECT: long process + writes files. |
-| `stretch_master` | Auto-stretch a master into an 8-bit PNG preview via the AstroPipe pipeline (opt-in `params`: `gradient`, `white_balance`, `deconv`, `saturation`, `upscale`, plus stretch controls); return the path + stats. |
-| `prepare_pixinsight_handoff` | Write the `pixinsight-mcp` JSON config (+ an XISF copy if `xisf` is installed) for the external server's creative finish. Does NOT run PixInsight. |
-| `list_masters` | List masters/previews produced under the output dir. Read-only. |
-
-DSS gives a **master + preview**; PixInsight is an **optional full finish** done by the
-user's external `pixinsight-mcp`. The **`image-refinement`** skill orchestrates the flow
-(keep-list only, backend + params stated, fallback if a backend is unreachable).
-
-### AstroPipe: the pure-Python pipeline (no DSS/PixInsight required)
-
-A DSS/PixInsight-free path built on the scientific-Python stack, exposed through
-`stack_keep_list(engine="pystack")` + `stretch_master(params=…)`:
-
-1. **Stack** (`pystack`): debayer (GRBG) → `astroalign` registration → memmap-bounded
-   sigma-clipped integration → `(3,H,W)` master. Validated visually equivalent to DSS.
-2. **Gradient removal**: star-masked `photutils.Background2D` sky subtraction.
-3. **Color calibration**: star-based white balance (neutral star color).
-4. **Stretch**: percentile-white-point MTF (raise the black point on low-SNR data).
-5. **Deconvolution**: gentle Richardson-Lucy (honest detail recovery; keep it light:
-   aggressive settings ring around bright stars).
-6. **Saturation**: chroma boost to match references.
-7. **Upscale** *(opt-in)*: Lanczos by default ("no new detail"); an optional AI path is
-   **provenance-labeled "AI-generated detail, not captured signal."**
-
-Every stage is opt-in via `stretch_master` params and provenance-logged. The whole thing
-runs cross-platform with no external desktop app.
+`qa_tier2` deliberately lives in **both** — here it tells you what to collect next, there it
+decides which frames belong in the master.
 
 ## Skills
 
@@ -484,9 +402,9 @@ ability to reach the telescope, the FITS files, and the QA computations; the Ski
 - **`autonomous-night`**: the unattended full-night run-book: propose a no-motion plan
   (`simulate_night`), get one explicit go-ahead, then loop target-by-target under hard
   guardrails (`check_night_guardrails`) and park at dawn or on any hard stop.
-- **`image-refinement`**: the post-session refinement run-book (on `seestar-refine`):
-  stack the QA keep-list into a master + preview with DSS (default), or, for PixInsight
-  owners, WBPP + a hand-off to the external `pixinsight-mcp` for a quality-gated finish.
+The processing run-books (`image-refinement`, `astro-processing`) moved with the service to
+[seestar-refine](https://github.com/OrangeAgente/seestar-refine); `qa-policy` stays here
+because grading is what tells the planner what is still outstanding.
 
 Skills stay at roughly ~100 tokens of description until they are invoked, so they add almost
 no standing context cost, while the MCP server is deliberately kept lean and single-purpose.
@@ -516,5 +434,6 @@ elsewhere). That key is a user secret: it lives only in the gitignored `secrets/
 the laws of your own jurisdiction. See [`NOTICE`](NOTICE) for full third-party attribution.
 
 Licensed under the [MIT License](LICENSE). It drives, but never bundles or redistributes,
-`seestar_alp` (GPL-3.0, separate process), the external `pixinsight-mcp` (MIT), DeepSkyStacker
-(freeware), and PixInsight (commercial); each remains under its own license.
+`seestar_alp` (GPL-3.0, separate process); it remains under its own license. (Processing
+tools — DeepSkyStacker, PixInsight, `pixinsight-mcp` — are used by the separate
+[seestar-refine](https://github.com/OrangeAgente/seestar-refine) repo, not by this one.)
