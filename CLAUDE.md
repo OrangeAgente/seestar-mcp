@@ -26,10 +26,9 @@ No new dependencies without strong justification — the astronomy is `astropy` 
 pinned), weather is `httpx`, FITS QA is `photutils`/`numpy`. Deps are exact-pinned and
 hash-locked in `uv.lock`; re-run `uv lock` if you touch `pyproject.toml`.
 
-`seestar_refine`'s stacking/preview deps (`astroalign`, `pillow`, `astroscrappy`) live in
-the **optional `refine` extra**, not in core — `uv sync --extra refine`. The dev group
-self-references it so the suite still covers them. A runtime install without it has **no
-stacking backend** unless DSS is configured; `check_backends` reports that honestly.
+Refinement (stacking/preview) lives in a separate repo: https://github.com/OrangeAgente/seestar-refine. Nothing here imports
+it, and it imports nothing here. `qa_tier2` is deliberately in both — see that repo's
+`docs/QA-PARITY.md`; a threshold change must land in both.
 
 ## Architecture — MCP = access, Skills = procedure
 

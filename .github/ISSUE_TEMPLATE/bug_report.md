@@ -21,7 +21,7 @@ A clear description of the bug and the behavior you expected.
 - SeeStar-AI commit / version:
 - OS + version:
 - Python version (`uv run python --version`):
-- Which service/tool: `seestar-mcp` / `seestar-refine` (name the tool)
+- Which tool (name it)
 
 **Logs / provenance**
 
