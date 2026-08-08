@@ -197,11 +197,30 @@ class SeestarController:
     # --- control / state --------------------------------------------------
 
     async def connect_telescope(self) -> dict:
-        """Connect to the telescope via seestar_alp (Alpaca ``connected``)."""
+        """Connect to the telescope via seestar_alp (Alpaca ``connected``).
+
+        ``ok`` reflects whether the scope is CONNECTED, not merely whether the
+        call completed. This used to return ``{"ok": True, "connected": False}``
+        on a scope that never came up — truthful in the payload, but anything
+        branching on ``ok`` alone (a run-book, a dashboard) concluded the scope
+        was live. For an action tool named ``connect_*``, failing to connect is a
+        failed action. ``connected`` is still carried either way.
+        """
         try:
             await self.alpaca.set_connected(True)
             connected = await self._maybe(self.alpaca.get_connected())
-            return {"ok": True, "connected": connected}
+            if connected:
+                return {"ok": True, "connected": True}
+            return {
+                "ok": False,
+                "connected": connected,
+                "error": (
+                    "connect attempt completed but the scope is still not "
+                    "connected — it may be asleep, off the network, or the "
+                    "firmware 7.18+ interop handshake may have failed "
+                    "(see the authentication branch in anomaly-playbook)"
+                ),
+            }
         except AlpacaError as exc:
             return _err(exc)
 

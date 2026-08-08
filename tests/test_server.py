@@ -566,3 +566,50 @@ def test_cache_survives_a_drifting_dark_window(tmp_path, monkeypatch):
         f"{calls['n']} fetches for a drifting-but-identical window — the cache "
         "key is time-sensitive again"
     )
+
+
+# --- connect_telescope must not report success on a failed connection --------
+# Found by exercising every tool surface against an unreachable scope, and
+# reproduced live on 2026-08-08: the tool returned {"ok": true, "connected":
+# false}. `ok` meant "the call ran" and the truth sat in `connected`, so anything
+# branching on `ok` alone — a run-book, a dashboard — concluded the scope was
+# connected when it was not. For an ACTION tool named connect_*, failing to
+# connect is a failed action.
+
+
+def test_connect_telescope_reports_failure_when_it_does_not_connect(tmp_path):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from seestar_mcp.config import Settings
+    from seestar_mcp.server import SeestarController
+
+    alpaca = AsyncMock()
+    alpaca.set_connected.return_value = None
+    alpaca.get_connected.return_value = False          # the scope stayed down
+    c = SeestarController(
+        settings=Settings(_env_file=None, data_dir=tmp_path),
+        provenance=MagicMock(), alpaca=alpaca, data=AsyncMock(), tier1=AsyncMock(),
+    )
+    out = asyncio.run(c.connect_telescope())
+
+    assert out["ok"] is False, "reported success while the scope is not connected"
+    assert out["connected"] is False, "the connected field must still be carried"
+    assert out.get("error"), "ok:false must carry a reason"
+
+
+def test_connect_telescope_still_succeeds_when_it_connects(tmp_path):
+    """REGRESSION: the happy path must be unchanged."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from seestar_mcp.config import Settings
+    from seestar_mcp.server import SeestarController
+
+    alpaca = AsyncMock()
+    alpaca.set_connected.return_value = None
+    alpaca.get_connected.return_value = True
+    c = SeestarController(
+        settings=Settings(_env_file=None, data_dir=tmp_path),
+        provenance=MagicMock(), alpaca=alpaca, data=AsyncMock(), tier1=AsyncMock(),
+    )
+    out = asyncio.run(c.connect_telescope())
+    assert out["ok"] is True and out["connected"] is True
