@@ -16,7 +16,7 @@ destructive. Runs on a Jetson, driven from the Claude phone app via Remote Contr
 There is **no bare `python`** on the dev machine (Windows Store shim). Always:
 
 ```bash
-uv run pytest            # full suite (394 tests, all green)
+uv run pytest            # full suite (300 tests, all green)
 uv run ruff check src tests
 uv run python -m seestar_mcp.server   # launch the MCP server (stdio)
 uv run python -c "..."   # one-off checks
@@ -26,13 +26,13 @@ No new dependencies without strong justification — the astronomy is `astropy` 
 pinned), weather is `httpx`, FITS QA is `photutils`/`numpy`. Deps are exact-pinned and
 hash-locked in `uv.lock`; re-run `uv lock` if you touch `pyproject.toml`.
 
-Refinement (stacking/preview) lives in a separate repo: https://github.com/OrangeAgente/seestar-refine. Nothing here imports
-it, and it imports nothing here. `qa_tier2` is deliberately in both — see that repo's
+Refinement (stacking/preview) lives in a separate repo, `seestar-refine` (split out
+2026-08-08; not yet published). Nothing here imports it, and it imports nothing here. `qa_tier2` is deliberately in both — see that repo's
 `docs/QA-PARITY.md`; a threshold change must land in both.
 
 ## Architecture — MCP = access, Skills = procedure
 
-- **MCP tools** (`src/seestar_mcp/server.py`) = access + reproducible computation. 33
+- **MCP tools** (`src/seestar_mcp/server.py`) = access + reproducible computation. 34
   single-purpose tools on one `SeestarController`. Each returns a JSON dict with `"ok"`,
   catches errors → `{"ok": false, "error": ...}`, and is provenance-logged. Motion/destructive
   tools have honest `SIDE EFFECT` descriptions.
@@ -48,6 +48,8 @@ it, and it imports nothing here. `qa_tier2` is deliberately in both — see that
     (120 DSOs), `site.py`, `weather.py` (meteoblue when `SEESTAR_METEOBLUE_API_KEY` is
     set, else keyless Open-Meteo — see `resolve_source`), `lightpollution.py`, `ranker.py`,
     `projects.py`, `obstructions.py` (learned mask), `autonomous.py` (guardrails + scheduler).
+  - `run_state.py` — persisted tri-valued run state, so a restarted server can answer
+    "is a run underway, and what is it doing?" without inference.
   - `config.py` (pydantic-settings, `SEESTAR_` env prefix), `provenance.py`, `secrets.py`.
 
 ## Non-negotiable conventions
