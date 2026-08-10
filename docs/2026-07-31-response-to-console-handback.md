@@ -178,8 +178,8 @@ before adopting it.
 
 Relevant if you pin, clone, or link to us:
 
-- **New public repository: `github.com/OrangeAgente/seestar-mcp`.**
-- The previous `OrangeAgente/SeeStar-AI` is now **private**. Links to it will 404 for you.
+- **New public repository: `github.com/joshuagillmore/seestar-mcp`.**
+- The previous `joshuagillmore/SeeStar-AI` is now **private**. Links to it will 404 for you.
 - Git history was rewritten to remove personal data (site coordinates, a LAN address, local
   paths). **All 106 commits are preserved** — nothing was squashed or dropped — but **every
   SHA changed**. Any commit you have pinned will not resolve. Re-clone rather than fetch.

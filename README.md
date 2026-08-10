@@ -376,7 +376,7 @@ different moment.
 
 The two are independent: `seestar-refine` shares no code with this repo and works on **any**
 folder of FITS, not just a Seestar's. Use this server alone, optionally add the
-[SeeStar Console](https://github.com/OrangeAgente/seestar-dashboard) dashboard, and optionally
+[SeeStar Console](https://github.com/joshuagillmore/seestar-dashboard) dashboard, and optionally
 add refinement when you want to process.
 
 `qa_tier2` deliberately lives in **both** — here it tells you what to collect next, there it
