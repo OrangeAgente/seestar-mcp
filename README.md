@@ -17,6 +17,11 @@ least-privilege. It is designed to run 24/7 on an **NVIDIA Jetson** host and is 
 the **Claude phone app via Claude Code Remote Control**. The Jetson is the brain; the phone
 is just a window into the local session.
 
+> **Companion:** [**SeeStar Console**](https://github.com/joshuagillmore/seestar-dashboard) is
+> the read-only web dashboard over these tools — it plans the night, watches the stack while it
+> runs, and triages the results afterwards. It renders the verdicts this server computes and
+> never computes one of its own.
+
 ## What a night looks like
 
 One unattended session on 2026-07-30/31: three targets, 970 subs, 2 h 42 m. Every sub
